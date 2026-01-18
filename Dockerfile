@@ -2,26 +2,36 @@ FROM node:20-slim
 
 WORKDIR /app
 
-# 1. Copia arquivos de configuração primeiro
+# 1. Instala git e outras dependências necessárias
+RUN apt-get update && apt-get install -y \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# 2. Copia arquivos de configuração primeiro
 COPY package.json ./
 COPY apps/web/package.json ./apps/web/
 
-# 2. Instala dependências backend
-RUN npm install --omit=dev --omit=optional
+# 3. Configura git para evitar prompts
+RUN git config --global user.email "docker@example.com" && \
+    git config --global user.name "Docker Builder"
 
-# 3. Instala dependências frontend
-RUN cd apps/web && npm install --omit=optional
+# 4. Instala dependências backend (com --no-optional para evitar problemas)
+RUN npm install --omit=dev --no-optional
 
-# 4. Copia o resto do código
+# 5. Instala dependências frontend
+RUN cd apps/web && npm install --no-optional
+
+# 6. Copia o resto do código
 COPY . .
 
-# 5. Build do frontend
+# 7. Build do frontend
 RUN cd apps/web && npm run build
 
-# 6. Gera client do Prisma
+# 8. Gera client do Prisma
 RUN npx prisma generate
 
-# 7. Cria diretório para sessions
+# 9. Cria diretório para sessions
 RUN mkdir -p sessions
 
 EXPOSE 3000
