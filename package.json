@@ -1,5 +1,6 @@
 {
   "name": "whatsapp-saas-single",
+  "type": "module",
   "scripts": {
     "start": "node apps/api/src/index.js",
     "build": "cd apps/web && npm install && npm run build && cd ../.. && npx prisma generate"
