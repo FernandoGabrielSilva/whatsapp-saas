@@ -2,14 +2,17 @@ FROM node:20
 
 WORKDIR /app
 
-# Install deps
-COPY package.json package-lock.json* ./
+# Copia manifests
+COPY package.json package-lock.json ./
+COPY apps/web/package.json apps/web/package.json
+
+# Instala deps da raiz
 RUN npm install
 
-# Copy all
+# Copia o resto do projeto
 COPY . .
 
-# Build web
+# Build do frontend
 RUN npm run web:build
 
 # Prisma
@@ -17,4 +20,5 @@ RUN npx prisma generate
 
 EXPOSE 3000
 
-CMD ["npm","run","start"]
+CMD ["npm", "run", "start"]
+
