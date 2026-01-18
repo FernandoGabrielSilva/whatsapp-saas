@@ -1,9 +1,14 @@
 import express from "express";
 import path from "path";
+import { fileURLToPath } from 'url';
+import { existsSync } from 'fs';
 import jwt from "jsonwebtoken";
 import { PrismaClient } from "@prisma/client";
 import makeWASocket,{useMultiFileAuthState} from "@whiskeysockets/baileys";
 import PQueue from "p-queue";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 app.use(express.json());
@@ -60,27 +65,37 @@ setInterval(async ()=>{
   }
 },5000);
 
-// Serve Next.js build - CORRIGIDO
-app.use(express.static("apps/web/.next/static"));
-app.use(express.static("apps/web/public"));
+// Serve Next.js build
+const webDir = path.join(__dirname, '../../web');
+app.use(express.static(path.join(webDir, '.next/static')));
+app.use(express.static(path.join(webDir, 'public')));
 
-// Rota para todas as páginas - CORRIGIDO
+// Rota para todas as páginas
 app.get("*", (req, res) => {
   // Verifica se é uma rota de API
   if (req.path.startsWith('/api/')) {
     return res.status(404).json({ error: 'Not found' });
   }
   
-  // Tenta servir o arquivo HTML correspondente
-  const filePath = path.join(
-    process.cwd(),
-    "apps/web/.next/server/pages",
-    req.path === "/" ? "index.html" : `${req.path}.html`
-  );
+  const basePath = path.join(webDir, '.next/server/pages');
+  let filePath;
   
-  // Fallback para index.html se o arquivo não existir (SPA)
-  if (!require('fs').existsSync(filePath)) {
-    return res.sendFile(path.join(process.cwd(), "apps/web/.next/server/pages/index.html"));
+  if (req.path === '/') {
+    filePath = path.join(basePath, 'index.html');
+  } else {
+    // Remove trailing slash if present
+    const cleanPath = req.path.endsWith('/') ? req.path.slice(0, -1) : req.path;
+    filePath = path.join(basePath, `${cleanPath}.html`);
+    
+    // Se não existir, tenta com /index.html
+    if (!existsSync(filePath)) {
+      filePath = path.join(basePath, cleanPath, 'index.html');
+    }
+  }
+  
+  // Fallback para index.html se o arquivo não existir
+  if (!existsSync(filePath)) {
+    filePath = path.join(basePath, 'index.html');
   }
   
   res.sendFile(filePath);
