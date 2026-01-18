@@ -89,9 +89,9 @@
   /* Destructive */
   --destructive: oklch(0.68 0.2 25);
 
-  /* Borders & Inputs */
-  --border: oklch(1 0 0 / 12%);
-  --input: oklch(1 0 0 / 18%);
+  /* Borders & Inputs - CORRIGIDO */
+  --border: oklch(1 0 0 0.12);
+  --input: oklch(1 0 0 0.18);
   --ring: oklch(0.55 0.18 264);
 
   /* Charts */
@@ -101,7 +101,7 @@
   --chart-4: oklch(0.6 0.2 290);
   --chart-5: oklch(0.62 0.22 310);
 
-  /* Sidebar */
+  /* Sidebar - CORRIGIDO */
   --sidebar: oklch(0.17 0.03 260);
   --sidebar-foreground: oklch(0.96 0.01 260);
 
@@ -111,7 +111,7 @@
   --sidebar-accent: oklch(0.32 0.07 264);
   --sidebar-accent-foreground: oklch(0.96 0.01 260);
 
-  --sidebar-border: oklch(1 0 0 / 12%);
+  --sidebar-border: oklch(1 0 0 0.12);
   --sidebar-ring: oklch(0.55 0.18 264);
 }
 
