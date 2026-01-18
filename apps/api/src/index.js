@@ -26,19 +26,68 @@ function auth(req,res,next){
   }catch{ res.sendStatus(401);}
 }
 
-app.post("/auth/register", async (req,res)=>{
+// ============ ENDPOINTS DE API ============
+
+// Status da API
+app.get("/api/status", (req, res) => {
+  res.json({
+    status: "online",
+    service: "WhatsApp SaaS API",
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    instances: instances.size,
+    environment: process.env.NODE_ENV || "development"
+  });
+});
+
+// Health check mais simples
+app.get("/api/health", (req, res) => {
+  res.json({ status: "OK", timestamp: new Date().toISOString() });
+});
+
+// Versão da API
+app.get("/api/version", (req, res) => {
+  res.json({
+    version: "1.0.0",
+    name: "WhatsApp SaaS",
+    description: "API para envio de mensagens via WhatsApp"
+  });
+});
+
+// Lista endpoints disponíveis
+app.get("/api", (req, res) => {
+  const endpoints = [
+    { method: "GET", path: "/api", description: "Lista de endpoints" },
+    { method: "GET", path: "/api/status", description: "Status da API" },
+    { method: "GET", path: "/api/health", description: "Health check simples" },
+    { method: "GET", path: "/api/version", description: "Versão da API" },
+    { method: "GET", path: "/api/debug-files", description: "Debug: estrutura de arquivos" },
+    { method: "POST", path: "/api/auth/register", description: "Registrar usuário" },
+    { method: "POST", path: "/api/auth/login", description: "Login de usuário" },
+    { method: "POST", path: "/api/instances", description: "Criar instância WhatsApp (auth required)" },
+    { method: "POST", path: "/api/send", description: "Enviar mensagem (auth required)" }
+  ];
+  res.json({
+    service: "WhatsApp SaaS API",
+    baseUrl: req.protocol + "://" + req.get('host') + "/api",
+    endpoints: endpoints
+  });
+});
+
+// Endpoints existentes (mantidos)
+app.post("/api/auth/register", async (req,res)=>{
   const u=await prisma.user.create({data:req.body});
   res.json(u);
 });
 
-app.post("/auth/login", async (req,res)=>{
+app.post("/api/auth/login", async (req,res)=>{
   const u=await prisma.user.findUnique({where:{email:req.body.email}});
   if(!u) return res.sendStatus(401);
   const t=jwt.sign({id:u.id}, process.env.JWT_SECRET,{expiresIn:"7d"});
   res.json({token:t});
 });
 
-app.post("/instances", auth, async (req,res)=>{
+app.post("/api/instances", auth, async (req,res)=>{
   const inst=await prisma.instance.create({data:{name:req.body.name,userId:req.user.id}});
   const {state, saveCreds}=await useMultiFileAuthState(`sessions/${inst.id}`);
   const sock=makeWASocket({auth:state});
@@ -47,7 +96,7 @@ app.post("/instances", auth, async (req,res)=>{
   res.json(inst);
 });
 
-app.post("/send", auth, async (req,res)=>{
+app.post("/api/send", auth, async (req,res)=>{
   const {instanceId, phone, text}=req.body;
   const sock=instances.get(instanceId);
   await queue.add(()=>sock.sendMessage(phone+"@s.whatsapp.net",{text}));
@@ -65,8 +114,10 @@ setInterval(async ()=>{
   }
 },5000);
 
+// ============ DEBUG ENDPOINTS ============
+
 // Debug endpoint para verificar estrutura de arquivos
-app.get("/debug-files", (req, res) => {
+app.get("/api/debug-files", (req, res) => {
   const webDir = path.join(__dirname, '../../web');
   const nextDir = path.join(webDir, '.next');
   
@@ -99,6 +150,8 @@ app.get("/debug-files", (req, res) => {
   });
 });
 
+// ============ SERVE FRONTEND ============
+
 // Serve Next.js build - primeiro tente várias possibilidades
 const webDir = path.join(__dirname, '../../web');
 
@@ -123,11 +176,12 @@ if (existsSync(publicDir)) {
   app.use(express.static(publicDir));
 }
 
-// Rota para todas as páginas - tente múltiplos locais
-app.get("*", (req, res) => {
-  // Verifica se é uma rota de API
+// ============ ROTA PARA FRONTEND ============
+
+app.get("*", (req, res, next) => {
+  // Se a rota começa com /api, não serve frontend
   if (req.path.startsWith('/api/')) {
-    return res.status(404).json({ error: 'Not found' });
+    return next(); // Passa para os handlers de API
   }
   
   // Possíveis locais dos arquivos HTML
@@ -177,26 +231,287 @@ app.get("*", (req, res) => {
     return res.sendFile(htmlFile);
   }
   
-  // Fallback: se não encontrou, tenta servir um HTML básico
-  console.log('No HTML file found, serving fallback');
+  // Fallback: se não encontrou, serve página de dashboard
+  console.log('No HTML file found, serving dashboard');
   res.send(`
     <!DOCTYPE html>
     <html>
       <head>
-        <title>WhatsApp SaaS</title>
+        <title>WhatsApp SaaS Dashboard</title>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
-          body { font-family: Arial, sans-serif; margin: 40px; }
-          .container { max-width: 800px; margin: 0 auto; }
-          .debug-link { margin-top: 20px; }
+          * { margin: 0; padding: 0; box-sizing: border-box; }
+          body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+          }
+          .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            max-width: 800px;
+            width: 100%;
+            overflow: hidden;
+          }
+          .header {
+            background: linear-gradient(135deg, #1e40af 0%, #1e3a8a 100%);
+            color: white;
+            padding: 40px;
+            text-align: center;
+          }
+          .header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+          }
+          .header p {
+            opacity: 0.9;
+            font-size: 1.1rem;
+          }
+          .content {
+            padding: 40px;
+          }
+          .status-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 40px;
+          }
+          .card {
+            background: #f8fafc;
+            border-radius: 15px;
+            padding: 25px;
+            border-left: 5px solid #3b82f6;
+            transition: transform 0.3s, box-shadow 0.3s;
+          }
+          .card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+          }
+          .card h3 {
+            color: #1e40af;
+            margin-bottom: 15px;
+            font-size: 1.3rem;
+          }
+          .card p {
+            color: #475569;
+            line-height: 1.6;
+          }
+          .card ul {
+            list-style: none;
+            margin-top: 15px;
+          }
+          .card li {
+            padding: 8px 0;
+            border-bottom: 1px solid #e2e8f0;
+          }
+          .card li:last-child {
+            border-bottom: none;
+          }
+          .card a {
+            color: #3b82f6;
+            text-decoration: none;
+            font-weight: 500;
+          }
+          .card a:hover {
+            text-decoration: underline;
+          }
+          .api-list {
+            background: #f1f5f9;
+            border-radius: 15px;
+            padding: 30px;
+            margin-top: 30px;
+          }
+          .api-list h3 {
+            color: #1e40af;
+            margin-bottom: 20px;
+            font-size: 1.5rem;
+          }
+          .endpoint {
+            background: white;
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            border: 1px solid #e2e8f0;
+          }
+          .method {
+            display: inline-block;
+            padding: 5px 12px;
+            border-radius: 6px;
+            font-weight: bold;
+            font-size: 0.9rem;
+            margin-right: 15px;
+            min-width: 70px;
+            text-align: center;
+          }
+          .method.get { background: #dbeafe; color: #1d4ed8; }
+          .method.post { background: #dcfce7; color: #166534; }
+          .path {
+            font-family: 'Courier New', monospace;
+            color: #475569;
+            flex-grow: 1;
+          }
+          .test-btn {
+            background: #3b82f6;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: background 0.3s;
+          }
+          .test-btn:hover {
+            background: #2563eb;
+          }
+          .footer {
+            text-align: center;
+            padding: 20px;
+            color: #64748b;
+            font-size: 0.9rem;
+            border-top: 1px solid #e2e8f0;
+          }
         </style>
+        <script>
+          async function testEndpoint(endpoint) {
+            try {
+              const response = await fetch(endpoint);
+              const data = await response.json();
+              alert(JSON.stringify(data, null, 2));
+            } catch (error) {
+              alert('Error: ' + error.message);
+            }
+          }
+          
+          async function checkAllEndpoints() {
+            const endpoints = [
+              '/api/health',
+              '/api/status',
+              '/api/version',
+              '/api/debug-files'
+            ];
+            
+            const results = [];
+            for (const endpoint of endpoints) {
+              try {
+                const response = await fetch(endpoint);
+                results.push({
+                  endpoint,
+                  status: response.status,
+                  ok: response.ok
+                });
+              } catch (error) {
+                results.push({
+                  endpoint,
+                  error: error.message
+                });
+              }
+            }
+            
+            alert('Test Results:\\n' + results.map(r => 
+              r.error ? \`❌ \${r.endpoint}: \${r.error}\` : 
+              r.ok ? \`✅ \${r.endpoint}: HTTP \${r.status}\` :
+              \`⚠️  \${r.endpoint}: HTTP \${r.status}\`
+            ).join('\\n'));
+          }
+        </script>
       </head>
       <body>
         <div class="container">
-          <h1>WhatsApp SaaS Dashboard</h1>
-          <p>Backend está funcionando, mas os arquivos do frontend não foram encontrados.</p>
-          <p>Verifique: <a href="/debug-files" target="_blank">/debug-files</a></p>
-          <div class="debug-link">
-            <a href="/debug-files">Ver estrutura de arquivos</a>
+          <div class="header">
+            <h1>🚀 WhatsApp SaaS</h1>
+            <p>API Status Dashboard</p>
+          </div>
+          
+          <div class="content">
+            <div class="status-cards">
+              <div class="card">
+                <h3>📊 API Status</h3>
+                <p>Verifique o status da API e seus endpoints</p>
+                <ul>
+                  <li><a href="/api/health" target="_blank">Health Check</a></li>
+                  <li><a href="/api/status" target="_blank">Status Completo</a></li>
+                  <li><a href="/api/version" target="_blank">Versão</a></li>
+                </ul>
+              </div>
+              
+              <div class="card">
+                <h3>🔧 Debug Tools</h3>
+                <p>Ferramentas para diagnóstico e solução de problemas</p>
+                <ul>
+                  <li><a href="/api/debug-files" target="_blank">Estrutura de Arquivos</a></li>
+                  <li><button class="test-btn" onclick="checkAllEndpoints()">Testar Todos Endpoints</button></li>
+                </ul>
+              </div>
+              
+              <div class="card">
+                <h3>📚 Documentação</h3>
+                <p>Recursos e links úteis</p>
+                <ul>
+                  <li><a href="/api" target="_blank">Lista de Endpoints</a></li>
+                  <li><a href="#" onclick="alert('Documentação em desenvolvimento')">API Docs</a></li>
+                  <li><a href="https://github.com" target="_blank">GitHub</a></li>
+                </ul>
+              </div>
+            </div>
+            
+            <div class="api-list">
+              <h3>🌐 Endpoints da API</h3>
+              
+              <div class="endpoint">
+                <span class="method get">GET</span>
+                <span class="path">/api</span>
+                <button class="test-btn" onclick="testEndpoint('/api')">Testar</button>
+              </div>
+              
+              <div class="endpoint">
+                <span class="method get">GET</span>
+                <span class="path">/api/health</span>
+                <button class="test-btn" onclick="testEndpoint('/api/health')">Testar</button>
+              </div>
+              
+              <div class="endpoint">
+                <span class="method get">GET</span>
+                <span class="path">/api/status</span>
+                <button class="test-btn" onclick="testEndpoint('/api/status')">Testar</button>
+              </div>
+              
+              <div class="endpoint">
+                <span class="method get">GET</span>
+                <span class="path">/api/version</span>
+                <button class="test-btn" onclick="testEndpoint('/api/version')">Testar</button>
+              </div>
+              
+              <div class="endpoint">
+                <span class="method get">GET</span>
+                <span class="path">/api/debug-files</span>
+                <button class="test-btn" onclick="testEndpoint('/api/debug-files')">Testar</button>
+              </div>
+              
+              <div class="endpoint">
+                <span class="method post">POST</span>
+                <span class="path">/api/auth/register</span>
+                <button class="test-btn" onclick="alert('Require POST request with JSON body')">Info</button>
+              </div>
+              
+              <div class="endpoint">
+                <span class="method post">POST</span>
+                <span class="path">/api/auth/login</span>
+                <button class="test-btn" onclick="alert('Require POST request with JSON body')">Info</button>
+              </div>
+            </div>
+          </div>
+          
+          <div class="footer">
+            <p>WhatsApp SaaS Dashboard • Backend Online • ${new Date().toLocaleString()}</p>
+            <p style="margin-top: 5px; font-size: 0.8rem;">Acesse diretamente os endpoints em /api/*</p>
           </div>
         </div>
       </body>
