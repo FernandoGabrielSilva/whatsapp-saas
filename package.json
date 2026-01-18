@@ -10,6 +10,7 @@
     "@prisma/client": "^5.22.0",
     "baileys": "^6.7.8",
     "p-queue": "^7.4.1",
+    "sharp": "^0.34.5",
     "qrcode": "^1.5.3"
   },
   "devDependencies": {
