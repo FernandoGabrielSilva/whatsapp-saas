@@ -2,38 +2,30 @@ FROM node:20-slim
 
 WORKDIR /app
 
-# 1. Instala git e outras dependências necessárias
-RUN apt-get update && apt-get install -y \
-    git \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+# 1. Instala git
+RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
 
-# 2. Configura git para evitar prompts
-RUN git config --global user.email "docker@example.com" && \
-    git config --global user.name "Docker Builder"
+# 2. Copia TUDO
+COPY . .
 
-# 3. Copia package.json da raiz
-COPY package.json ./
-
-# 4. Instala dependências backend
+# 3. Instala dependências backend
 RUN npm install --omit=dev --no-optional
 
-# 5. Copia arquivos do frontend
-COPY apps/web ./apps/web
+# 4. Corrige o script build no frontend (sobrescreve com um correto)
+RUN echo '{"scripts": {"build": "next build"}}' > apps/web/package.json.tmp && \
+    cat apps/web/package.json | jq '.scripts.build = "next build"' > apps/web/package.json.tmp 2>/dev/null || \
+    mv apps/web/package.json.tmp apps/web/package.json
 
-# 6. Instala e build do frontend
-RUN cd apps/web && \
-    npm install --no-optional && \
-    npm run build
+# 5. Instala dependências frontend
+RUN cd apps/web && npm install --no-optional
 
-# 7. Copia o resto do código (exceto o que já copiamos)
-COPY prisma ./prisma
-COPY apps/api ./apps/api
+# 6. Build do frontend
+RUN cd apps/web && npm run build
 
-# 8. Gera client do Prisma
+# 7. Gera client do Prisma
 RUN npx prisma generate
 
-# 9. Cria diretório para sessions
+# 8. Cria diretório para sessions
 RUN mkdir -p sessions
 
 EXPOSE 3000
