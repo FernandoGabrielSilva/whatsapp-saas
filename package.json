@@ -2,23 +2,25 @@
   "name": "whatsapp-saas-single",
   "type": "module",
   "scripts": {
-    "web:build": "cd apps/web && npm install && npm run build",
+    "web:install": "cd apps/web && npm install",
+    "web:build": "cd apps/web && npm run build",
     "start": "node apps/api/src/index.js",
-    "build": "npm run web:build && npx prisma generate"
+    "build": "npm run web:install && npm run web:build && npx prisma generate",
+    "postinstall": "npm audit fix --force"
   },
   "dependencies": {
     "express": "^4.18.2",
-    "jsonwebtoken": "^9.0.2",
-    "@prisma/client": "^5.9.1",
-    "@whiskeysockets/baileys": "^6.7.8",
-    "next": "14.1.0",
+    "jsonwebtoken": "^9.0.3",
+    "@prisma/client": "^5.22.0",
+    "@whiskeysockets/baileys": "^6.17.16",
+    "next": "14.2.15",
     "react": "18.2.0",
     "react-dom": "18.2.0",
-    "tailwindcss": "^3.4.1",
+    "tailwindcss": "^3.4.19",
     "p-queue": "^7.4.1",
     "qrcode": "^1.5.3"
   },
   "devDependencies": {
-    "prisma": "^5.9.1"
+    "prisma": "^5.22.0"
   }
 }

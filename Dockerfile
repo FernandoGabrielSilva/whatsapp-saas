@@ -6,14 +6,17 @@ WORKDIR /app
 COPY package.json ./
 COPY apps/web/package.json apps/web/package.json
 
-# Instala deps da raiz
-RUN npm install
+# Instala deps da raiz e do frontend
+RUN npm install && cd apps/web && npm install
 
 # Copia o resto do projeto
 COPY . .
 
 # Build do frontend
-RUN npm run build
+RUN npm run web:build
+
+# Prisma
+RUN npx prisma generate
 
 # Cria diretório para sessions
 RUN mkdir -p sessions

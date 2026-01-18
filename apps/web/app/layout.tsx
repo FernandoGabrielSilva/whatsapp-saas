@@ -1,20 +1,24 @@
-import "./globals.css";
-import type { ReactNode } from "react";
+import type { Metadata } from 'next';
+import { Inter } from 'next/font/google';
+import './globals.css';
 
-export const metadata = {
-  title: "Minha aplicação",
-  description: "App Next.js",
+const inter = Inter({ subsets: ['latin'] });
+
+export const metadata: Metadata = {
+  title: 'WhatsApp SaaS',
+  description: 'Envie mensagens WhatsApp via API',
 };
 
 export default function RootLayout({
   children,
 }: {
-  children: ReactNode;
+  children: React.ReactNode;
 }) {
   return (
     <html lang="pt-BR">
-      <body>{children}</body>
+      <body className={inter.className}>
+        {children}
+      </body>
     </html>
   );
 }
-

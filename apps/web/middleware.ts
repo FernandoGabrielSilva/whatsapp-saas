@@ -2,16 +2,19 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 
 export function middleware(request: NextRequest) {
-  // Redireciona todas as rotas de API para o backend Express
-  if (request.nextUrl.pathname.startsWith('/api/')) {
-    return NextResponse.rewrite(
-      new URL(request.nextUrl.pathname, process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000')
-    );
-  }
-  
+  // Se estamos em desenvolvimento ou produção com o mesmo servidor
+  // Não fazemos rewrite, pois a API está no mesmo servidor
   return NextResponse.next();
 }
 
 export const config = {
-  matcher: '/api/:path*',
+  matcher: [
+    /*
+     * Match all request paths except for the ones starting with:
+     * - _next/static (static files)
+     * - _next/image (image optimization files)
+     * - favicon.ico (favicon file)
+     */
+    '/((?!_next/static|_next/image|favicon.ico).*)',
+  ],
 };
