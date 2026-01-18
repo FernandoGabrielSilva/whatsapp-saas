@@ -3,7 +3,7 @@ FROM node:20
 WORKDIR /app
 
 # Copia manifests
-COPY package.json package-lock.json ./
+COPY package.json ./
 COPY apps/web/package.json apps/web/package.json
 
 # Instala deps da raiz
