@@ -1,31 +1,24 @@
-FROM node:20-slim
+FROM node:20
 
 WORKDIR /app
 
-# 1. Instala git
-RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+# Copia manifests
+COPY package.json ./
+COPY apps/web/package.json apps/web/package.json
 
-# 2. Copia TUDO
+# Instala deps da raiz e do frontend
+RUN npm install && cd apps/web && npm install
+
+# Copia o resto do projeto
 COPY . .
 
-# 3. Instala dependências backend
-RUN npm install --omit=dev --no-optional
+# Build do frontend
+RUN npm run build
 
-# 4. Corrige o script build no frontend (sobrescreve com um correto)
-RUN echo '{"scripts": {"build": "next build"}}' > apps/web/package.json.tmp && \
-    cat apps/web/package.json | jq '.scripts.build = "next build"' > apps/web/package.json.tmp 2>/dev/null || \
-    mv apps/web/package.json.tmp apps/web/package.json
-
-# 5. Instala dependências frontend
-RUN cd apps/web && npm install --no-optional
-
-# 6. Build do frontend
-RUN cd apps/web && npm run build
-
-# 7. Gera client do Prisma
+# Prisma
 RUN npx prisma generate
 
-# 8. Cria diretório para sessions
+# Cria diretório para sessions
 RUN mkdir -p sessions
 
 EXPOSE 3000
