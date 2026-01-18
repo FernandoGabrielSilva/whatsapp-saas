@@ -4,11 +4,11 @@ WORKDIR /app
 
 # 1. Instala dependências globais (SEM git)
 COPY package.json package-lock.json ./
-RUN npm ci --only=production --no-optional
+RUN npm install --omit=dev --omit=optional
 
 # 2. Instala dependências do frontend (SEM git)
 COPY apps/web/package.json apps/web/package-lock.json apps/web/
-RUN cd apps/web && npm ci --no-optional
+RUN cd apps/web && npm install --omit=optional
 
 # 3. Copia o resto do código
 COPY . .
