@@ -2,24 +2,43 @@ FROM node:20-slim
 
 WORKDIR /app
 
-# 1. Instala dependências globais (SEM git)
-COPY package.json package-lock.json ./
-RUN npm install --omit=dev --omit=optional
+# 1. Copia primeiro apenas os package.json
+COPY package.json ./
 
-# 2. Instala dependências do frontend (SEM git)
-COPY apps/web/package.json apps/web/package-lock.json apps/web/
-RUN cd apps/web && npm install --omit=optional
+# 2. Copia package-lock.json se existir, senão ignora
+COPY package-lock.json* ./ || true
 
-# 3. Copia o resto do código
+# 3. Instala dependências globais
+RUN if [ -f package-lock.json ]; then \
+      npm ci --omit=dev --omit=optional; \
+    else \
+      npm install --omit=dev --omit=optional; \
+    fi
+
+# 4. Copia arquivos do frontend
+COPY apps/web/package.json ./apps/web/
+
+# 5. Copia package-lock.json do frontend se existir
+COPY apps/web/package-lock.json* ./apps/web/ || true
+
+# 6. Instala dependências do frontend
+RUN cd apps/web && \
+    if [ -f package-lock.json ]; then \
+      npm ci --omit=optional; \
+    else \
+      npm install --omit=optional; \
+    fi
+
+# 7. Copia o resto do código
 COPY . .
 
-# 4. Build do frontend
+# 8. Build do frontend
 RUN cd apps/web && npm run build
 
-# 5. Gera client do Prisma
+# 9. Gera client do Prisma
 RUN npx prisma generate
 
-# 6. Cria diretório para sessions
+# 10. Cria diretório para sessions
 RUN mkdir -p sessions
 
 EXPOSE 3000
