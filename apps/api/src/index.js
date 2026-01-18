@@ -60,10 +60,30 @@ setInterval(async ()=>{
   }
 },5000);
 
-// Serve Next.js build
+// Serve Next.js build - CORRIGIDO
 app.use(express.static("apps/web/.next/static"));
-app.get("*",(req,res)=>{
-  res.sendFile(path.resolve("apps/web/.next/server/app/page.html"));
+app.use(express.static("apps/web/public"));
+
+// Rota para todas as páginas - CORRIGIDO
+app.get("*", (req, res) => {
+  // Verifica se é uma rota de API
+  if (req.path.startsWith('/api/')) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  
+  // Tenta servir o arquivo HTML correspondente
+  const filePath = path.join(
+    process.cwd(),
+    "apps/web/.next/server/pages",
+    req.path === "/" ? "index.html" : `${req.path}.html`
+  );
+  
+  // Fallback para index.html se o arquivo não existir (SPA)
+  if (!require('fs').existsSync(filePath)) {
+    return res.sendFile(path.join(process.cwd(), "apps/web/.next/server/pages/index.html"));
+  }
+  
+  res.sendFile(filePath);
 });
 
 app.listen(3000,()=>console.log("SaaS running on 3000"));

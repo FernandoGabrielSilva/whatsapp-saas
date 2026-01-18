@@ -13,12 +13,11 @@ RUN npm install
 COPY . .
 
 # Build do frontend
-RUN npm run web:build
+RUN npm run build
 
-# Prisma
-RUN npx prisma generate
+# Cria diretório para sessions
+RUN mkdir -p sessions
 
 EXPOSE 3000
 
 CMD ["npm", "run", "start"]
-
