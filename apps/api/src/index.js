@@ -1,12 +1,11 @@
-import express from "express";
-import path from "path";
-import { fileURLToPath } from 'url';
-import { existsSync, readdirSync, statSync } from 'fs';
-import jwt from "jsonwebtoken";
-import { PrismaClient } from "@prisma/client";
-import makeWASocket, { useMultiFileAuthState } from "baileys";
-import PQueue from "p-queue";
-import qrcode from 'qrcode';
+const express = require("express");
+const path = require("path");
+const fs = require("fs");
+const jwt = require("jsonwebtoken");
+const { PrismaClient } = require("@prisma/client");
+const { default: makeWASocket, useMultiFileAuthState } = require("baileys");
+const PQueue = require("p-queue");
+const qrcode = require('qrcode');
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

@@ -1,32 +1,27 @@
+[file name]: Dockerfile
+[file content begin]
 FROM node:20-alpine
 
 WORKDIR /app
 
-# Copia apenas os arquivos necessários primeiro (cache otimizado)
+# 1. Instala dependências globais
 COPY package.json ./
-COPY apps/web/package.json apps/web/package.json
+RUN npm install
 
-# Instala dependências globais
-RUN npm ci --only=production
+# 2. Instala e build do frontend
+COPY apps/web/package.json apps/web/
+RUN cd apps/web && npm install && npm run build
 
-# Instala dependências de desenvolvimento globalmente
-RUN npm install -D prisma
-
-# Instala dependências do frontend
-RUN cd apps/web && npm ci
-
-# Copia o resto do projeto
+# 3. Copia o resto do código
 COPY . .
 
-# Build do frontend
-RUN npm run web:build
-
-# Gera client do Prisma
+# 4. Gera client do Prisma
 RUN npx prisma generate
 
-# Cria diretório para sessions
+# 5. Cria diretório para sessions
 RUN mkdir -p sessions
 
 EXPOSE 3000
 
 CMD ["npm", "run", "start"]
+[file content end]
