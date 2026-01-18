@@ -1,5 +1,3 @@
-[file name]: Dockerfile
-[file content begin]
 FROM node:20-alpine
 
 WORKDIR /app
@@ -24,4 +22,3 @@ RUN mkdir -p sessions
 EXPOSE 3000
 
 CMD ["npm", "run", "start"]
-[file content end]
