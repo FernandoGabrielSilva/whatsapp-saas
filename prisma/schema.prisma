@@ -1,29 +1,45 @@
-generator client { provider = "prisma-client-js" }
-datasource db { provider = "postgresql"; url = env("DATABASE_URL") }
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
 
 model User {
-  id String @id @default(uuid())
-  email String @unique
-  password String
-  plan String @default("free")
-  createdAt DateTime @default(now())
-  instances Instance[]
-  schedules Schedule[]
+  id         String     @id @default(uuid())
+  email      String     @unique
+  password   String
+  plan       String     @default("free")
+  createdAt  DateTime   @default(now())
+
+  instances  Instance[]
+  schedules  Schedule[]
 }
 
 model Instance {
-  id String @id @default(uuid())
-  name String
-  status String @default("disconnected")
-  userId String
+  id        String   @id @default(uuid())
+  name      String
+  status    String   @default("disconnected")
+
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+
+  schedules Schedule[]
 }
 
 model Schedule {
-  id String @id @default(uuid())
-  phone String
-  text String
-  sendAt DateTime
-  sent Boolean @default(false)
+  id         String   @id @default(uuid())
+  phone      String
+  text       String
+  sendAt     DateTime
+  sent       Boolean  @default(false)
+
   instanceId String
-  userId String
+  instance   Instance @relation(fields: [instanceId], references: [id])
+
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
 }
+
