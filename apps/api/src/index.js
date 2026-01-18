@@ -4,7 +4,7 @@ import { fileURLToPath } from 'url';
 import { existsSync, readdirSync, statSync } from 'fs';
 import jwt from "jsonwebtoken";
 import { PrismaClient } from "@prisma/client";
-import makeWASocket,{useMultiFileAuthState} from "@whiskeysockets/baileys";
+import makeWASocket, { useMultiFileAuthState } from "baileys";
 import PQueue from "p-queue";
 import qrcode from 'qrcode';
 
