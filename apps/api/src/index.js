@@ -6,6 +6,7 @@ import jwt from "jsonwebtoken";
 import { PrismaClient } from "@prisma/client";
 import makeWASocket,{useMultiFileAuthState} from "@whiskeysockets/baileys";
 import PQueue from "p-queue";
+import qrcode from 'qrcode';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -40,12 +41,12 @@ app.get("/api/status", (req, res) => {
   });
 });
 
-// Health check mais simples
+// Health check
 app.get("/api/health", (req, res) => {
   res.json({ status: "OK", timestamp: new Date().toISOString() });
 });
 
-// Versão da API
+// Versão
 app.get("/api/version", (req, res) => {
   res.json({
     version: "1.0.0",
@@ -54,17 +55,19 @@ app.get("/api/version", (req, res) => {
   });
 });
 
-// Lista endpoints disponíveis
+// Lista endpoints
 app.get("/api", (req, res) => {
   const endpoints = [
     { method: "GET", path: "/api", description: "Lista de endpoints" },
     { method: "GET", path: "/api/status", description: "Status da API" },
-    { method: "GET", path: "/api/health", description: "Health check simples" },
+    { method: "GET", path: "/api/health", description: "Health check" },
     { method: "GET", path: "/api/version", description: "Versão da API" },
     { method: "GET", path: "/api/debug-files", description: "Debug: estrutura de arquivos" },
+    { method: "GET", path: "/api/instances/:id/qr", description: "Obter QR code da instância" },
     { method: "POST", path: "/api/auth/register", description: "Registrar usuário" },
     { method: "POST", path: "/api/auth/login", description: "Login de usuário" },
     { method: "POST", path: "/api/instances", description: "Criar instância WhatsApp (auth required)" },
+    { method: "GET", path: "/api/instances", description: "Listar minhas instâncias (auth required)" },
     { method: "POST", path: "/api/send", description: "Enviar mensagem (auth required)" }
   ];
   res.json({
@@ -74,12 +77,17 @@ app.get("/api", (req, res) => {
   });
 });
 
-// Endpoints existentes (mantidos)
+// Registrar usuário
 app.post("/api/auth/register", async (req,res)=>{
-  const u=await prisma.user.create({data:req.body});
-  res.json(u);
+  try {
+    const u=await prisma.user.create({data:req.body});
+    res.json(u);
+  } catch(error) {
+    res.status(400).json({ error: error.message });
+  }
 });
 
+// Login
 app.post("/api/auth/login", async (req,res)=>{
   const u=await prisma.user.findUnique({where:{email:req.body.email}});
   if(!u) return res.sendStatus(401);
@@ -87,23 +95,140 @@ app.post("/api/auth/login", async (req,res)=>{
   res.json({token:t});
 });
 
+// Criar instância
 app.post("/api/instances", auth, async (req,res)=>{
-  const inst=await prisma.instance.create({data:{name:req.body.name,userId:req.user.id}});
-  const {state, saveCreds}=await useMultiFileAuthState(`sessions/${inst.id}`);
-  const sock=makeWASocket({auth:state});
-  sock.ev.on("creds.update", saveCreds);
-  instances.set(inst.id, sock);
-  res.json(inst);
+  try {
+    const inst=await prisma.instance.create({data:{name:req.body.name,userId:req.user.id}});
+    const {state, saveCreds}=await useMultiFileAuthState(`sessions/${inst.id}`);
+    
+    const sock=makeWASocket({
+      auth: state,
+      printQRInTerminal: false
+    });
+    
+    // Listen for QR code
+    sock.ev.on('connection.update', (update) => {
+      if (update.qr) {
+        console.log(`QR code for instance ${inst.id}:`, update.qr);
+        // Store QR temporarily (in production, use Redis or similar)
+        sock.qrCode = update.qr;
+      }
+      if (update.connection === 'open') {
+        console.log(`Instance ${inst.id} connected!`);
+        sock.isConnected = true;
+      }
+    });
+    
+    sock.ev.on("creds.update", saveCreds);
+    instances.set(inst.id, { sock, userId: req.user.id });
+    
+    res.json({
+      id: inst.id,
+      name: inst.name,
+      status: 'pending_qr',
+      message: 'Instance created. Get QR code at /api/instances/{id}/qr'
+    });
+  } catch(error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
+// Listar instâncias do usuário
+app.get("/api/instances", auth, async (req, res) => {
+  const userInstances = await prisma.instance.findMany({
+    where: { userId: req.user.id }
+  });
+  
+  // Adiciona status de conexão
+  const instancesWithStatus = userInstances.map(inst => {
+    const instanceData = instances.get(inst.id);
+    return {
+      ...inst,
+      connectionStatus: instanceData?.sock.isConnected ? 'connected' : 'disconnected',
+      hasQr: !!instanceData?.sock.qrCode
+    };
+  });
+  
+  res.json(instancesWithStatus);
+});
+
+// Obter QR code da instância
+app.get("/api/instances/:id/qr", auth, async (req, res) => {
+  const instanceId = req.params.id;
+  const instanceData = instances.get(instanceId);
+  
+  if (!instanceData) {
+    return res.status(404).json({ error: "Instance not found" });
+  }
+  
+  if (instanceData.userId !== req.user.id) {
+    return res.status(403).json({ error: "Access denied" });
+  }
+  
+  if (instanceData.sock.qrCode) {
+    try {
+      // Gerar QR code como imagem PNG
+      const qrImage = await qrcode.toDataURL(instanceData.sock.qrCode);
+      res.json({
+        qr: instanceData.sock.qrCode,
+        qrImage: qrImage,
+        status: 'qr_available',
+        message: 'Scan this QR code with WhatsApp'
+      });
+    } catch (error) {
+      res.json({
+        qr: instanceData.sock.qrCode,
+        status: 'qr_available',
+        message: 'Scan this QR code with WhatsApp'
+      });
+    }
+  } else if (instanceData.sock.isConnected) {
+    res.json({
+      status: 'connected',
+      message: 'Instance is already connected to WhatsApp'
+    });
+  } else {
+    res.json({
+      status: 'waiting',
+      message: 'Waiting for QR code generation...'
+    });
+  }
+});
+
+// Enviar mensagem
 app.post("/api/send", auth, async (req,res)=>{
   const {instanceId, phone, text}=req.body;
-  const sock=instances.get(instanceId);
-  await queue.add(()=>sock.sendMessage(phone+"@s.whatsapp.net",{text}));
-  res.json({ok:true});
+  
+  // Validação
+  if (!instanceId || !phone || !text) {
+    return res.status(400).json({ error: "Missing required fields: instanceId, phone, text" });
+  }
+  
+  const instanceData = instances.get(instanceId);
+  
+  if (!instanceData) {
+    return res.status(404).json({ error: "Instance not found" });
+  }
+  
+  if (instanceData.userId !== req.user.id) {
+    return res.status(403).json({ error: "Access denied" });
+  }
+  
+  if (!instanceData.sock.isConnected) {
+    return res.status(400).json({ error: "Instance not connected to WhatsApp" });
+  }
+  
+  try {
+    await queue.add(() => 
+      instanceData.sock.sendMessage(`${phone}@s.whatsapp.net`, { text })
+    );
+    res.json({ok:true, message: "Message sent successfully"});
+  } catch(error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
-// Scheduler
+// Scheduler para mensagens agendadas
 setInterval(async ()=>{
   const jobs=await prisma.schedule.findMany({where:{sent:false, sendAt:{lte:new Date()}}});
   for(const j of jobs){
