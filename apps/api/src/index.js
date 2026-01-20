@@ -568,379 +568,553 @@ app.get("/api/debug-files", (req, res) => {
   });
 });
 
-// ============ SERVE FRONTEND ============
+// Debug específico para Render
+app.get("/api/render-debug", (req, res) => {
+  const checkPaths = [
+    { name: 'Current Directory', path: process.cwd() },
+    { name: 'Web Directory', path: path.join(__dirname, '../../web') },
+    { name: 'Next Build', path: path.join(__dirname, '../../web/.next') },
+    { name: 'Next Static', path: path.join(__dirname, '../../web/.next/static') },
+    { name: 'Next Export', path: path.join(__dirname, '../../web/out') },
+    { name: 'Public', path: path.join(__dirname, '../../web/public') },
+    { name: 'Sessions', path: sessionsDir },
+    { name: 'App Root', path: path.join(__dirname, '../../..') }
+  ];
+  
+  const results = [];
+  
+  checkPaths.forEach(item => {
+    const exists = existsSync(item.path);
+    let files = [];
+    let error = null;
+    
+    if (exists) {
+      try {
+        files = readdirSync(item.path).slice(0, 10);
+      } catch (e) {
+        error = e.message;
+      }
+    }
+    
+    results.push({
+      name: item.name,
+      path: item.path,
+      exists: exists,
+      files: files,
+      error: error
+    });
+  });
+  
+  res.json({
+    environment: process.env.NODE_ENV || 'development',
+    port: process.env.PORT,
+    cwd: process.cwd(),
+    __dirname: __dirname,
+    __filename: __filename,
+    paths: results,
+    platform: process.platform,
+    arch: process.arch,
+    nodeVersion: process.version
+  });
+});
 
-// Serve Next.js build - primeiro tente várias possibilidades
+// ============ CONFIGURAÇÃO DO FRONTEND ============
+
+// Caminhos importantes
 const webDir = path.join(__dirname, '../../web');
+const nextBuildDir = path.join(webDir, '.next');
+const exportDir = path.join(webDir, 'out'); // Next.js export estático
+const publicDir = path.join(webDir, 'public');
 
-// Tente encontrar os arquivos estáticos
-const possibleStaticDirs = [
-  path.join(webDir, '.next/static'),
-  path.join(webDir, '.next/_next/static'),
-  path.join(webDir, 'out/_next/static'),
-  path.join(webDir, 'out/static')
-];
+console.log('=========================================');
+console.log('🚀 Configurando WhatsApp SaaS');
+console.log(`📁 Web Directory: ${webDir}`);
+console.log(`📁 Next Build: ${nextBuildDir}`);
+console.log(`📁 Export Static: ${exportDir}`);
+console.log(`📁 Public: ${publicDir}`);
+console.log('=========================================');
 
-const nextStaticDir = path.join(webDir, '.next/static');
-
-if (existsSync(nextStaticDir)) {
-  console.log(`Serving Next.js static files from ${nextStaticDir}`);
-  app.use('/_next', express.static(path.join(webDir, '.next')));
+// Cria pasta public se não existir
+if (!existsSync(publicDir)) {
+  mkdirSync(publicDir, { recursive: true });
+  console.log(`📁 Criada pasta public: ${publicDir}`);
 }
 
 // Serve arquivos públicos
-const publicDir = path.join(webDir, 'public');
-if (existsSync(publicDir)) {
-  app.use(express.static(publicDir));
+console.log(`📁 Servindo arquivos públicos de: ${publicDir}`);
+app.use(express.static(publicDir));
+app.use('/public', express.static(publicDir));
+
+// ============ SERVE NEXT.JS EXPORT STATIC (SOLUÇÃO DEFINITIVA) ============
+
+if (existsSync(exportDir)) {
+  console.log(`✅ Export estático do Next.js encontrado em: ${exportDir}`);
+  
+  // Serve todos os arquivos da pasta out
+  app.use(express.static(exportDir));
+  
+  // Serve arquivos CSS, JS, imagens, etc.
+  console.log('✅ Frontend estático configurado com sucesso!');
+  
+  // Log dos arquivos encontrados
+  try {
+    const exportFiles = readdirSync(exportDir);
+    console.log(`📦 Arquivos no export: ${exportFiles.slice(0, 10).join(', ')}${exportFiles.length > 10 ? '...' : ''}`);
+    
+    // Verifica se tem index.html
+    const indexPath = path.join(exportDir, 'index.html');
+    if (existsSync(indexPath)) {
+      console.log(`✅ index.html encontrado: ${indexPath}`);
+    } else {
+      console.log(`❌ index.html NÃO encontrado em: ${indexPath}`);
+    }
+    
+    // Verifica arquivos CSS
+    const cssFiles = exportFiles.filter(f => f.endsWith('.css'));
+    console.log(`🎨 Arquivos CSS: ${cssFiles.length}`);
+    
+    // Verifica arquivos JS
+    const jsFiles = exportFiles.filter(f => f.endsWith('.js'));
+    console.log(`⚡ Arquivos JS: ${jsFiles.length}`);
+  } catch (e) {
+    console.log(`❌ Erro ao listar export: ${e.message}`);
+  }
+  
+} else if (existsSync(nextBuildDir)) {
+  console.log(`⚠️  Export estático não encontrado, usando build normal`);
+  
+  // Serve arquivos estáticos do Next.js build
+  const staticDir = path.join(nextBuildDir, 'static');
+  if (existsSync(staticDir)) {
+    console.log(`📁 Servindo /_next/static de: ${staticDir}`);
+    app.use('/_next/static', express.static(staticDir));
+    
+    // Verifica se tem CSS
+    try {
+      const findCssFiles = (dir) => {
+        const cssFiles = [];
+        const search = (currentDir) => {
+          try {
+            const items = readdirSync(currentDir);
+            for (const item of items) {
+              const fullPath = path.join(currentDir, item);
+              const stat = statSync(fullPath);
+              if (stat.isDirectory()) {
+                search(fullPath);
+              } else if (item.endsWith('.css')) {
+                cssFiles.push(path.relative(staticDir, fullPath));
+              }
+            }
+          } catch (e) {
+            // Ignora
+          }
+        };
+        search(dir);
+        return cssFiles;
+      };
+      
+      const cssFiles = findCssFiles(staticDir);
+      console.log(`🎨 Arquivos CSS no build: ${cssFiles.length}`);
+    } catch (e) {
+      console.log(`❌ Erro ao buscar CSS: ${e.message}`);
+    }
+  }
+} else {
+  console.log(`❌ Nenhum build do Next.js encontrado!`);
+  console.log(`   Execute: cd apps/web && npm run build`);
 }
 
 // ============ ROTA PARA FRONTEND ============
 
 app.get("*", (req, res, next) => {
-  // Se a rota começa com /api, não serve frontend
+  // Se for API, passa adiante
   if (req.path.startsWith('/api/')) {
-    return next(); // Passa para os handlers de API
+    return next();
   }
   
-  // Possíveis locais dos arquivos HTML
-  const possibleHtmlLocations = [
-    // Next.js 12+ Pages Router
-    path.join(webDir, '.next/server/pages'),
-    // Next.js 13+ App Router
-    path.join(webDir, '.next/server/app'),
-    // Next.js standalone output
-    path.join(webDir, '.next/server'),
-    // Next.js export
-    path.join(webDir, 'out'),
-    // Build normal
-    path.join(webDir, 'build')
-  ];
+  console.log(`🖥️  Frontend request: ${req.path}`);
   
-  let htmlFile = null;
-  
-  for (const basePath of possibleHtmlLocations) {
-    if (!existsSync(basePath)) continue;
+  // Se tivermos export estático, servimos dele
+  if (existsSync(exportDir)) {
+    let filePath = req.path;
     
-    let filePath;
+    // Remove trailing slash
+    if (filePath.endsWith('/') && filePath.length > 1) {
+      filePath = filePath.slice(0, -1);
+    }
     
-    if (req.path === '/') {
-      filePath = path.join(basePath, 'index.html');
-    } else {
-      // Remove trailing slash if present
-      const cleanPath = req.path.endsWith('/') ? req.path.slice(0, -1) : req.path;
-      
+    // Constrói o caminho do arquivo
+    let fullPath;
+    
+    if (filePath === '') {
+      // Raiz
+      fullPath = path.join(exportDir, 'index.html');
+    } else if (!path.extname(filePath)) {
+      // Se não tem extensão, pode ser uma página
       // Tenta .html primeiro
-      filePath = path.join(basePath, `${cleanPath}.html`);
+      fullPath = path.join(exportDir, filePath + '.html');
       
-      // Se não existir, tenta /index.html
-      if (!existsSync(filePath)) {
-        filePath = path.join(basePath, cleanPath, 'index.html');
+      // Se não existe, tenta como diretório com index.html
+      if (!existsSync(fullPath)) {
+        const dirPath = path.join(exportDir, filePath);
+        const indexPath = path.join(dirPath, 'index.html');
+        if (existsSync(indexPath)) {
+          fullPath = indexPath;
+        }
       }
+    } else {
+      // Tem extensão, serve o arquivo diretamente
+      fullPath = path.join(exportDir, filePath);
     }
     
-    if (existsSync(filePath)) {
-      htmlFile = filePath;
-      break;
+    // Tenta servir o arquivo
+    if (existsSync(fullPath)) {
+      console.log(`✅ Servindo: ${path.relative(exportDir, fullPath)}`);
+      
+      // Headers para cache
+      if (fullPath.endsWith('.html')) {
+        res.setHeader('Cache-Control', 'public, max-age=0');
+      } else if (fullPath.endsWith('.css') || fullPath.endsWith('.js')) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      }
+      
+      return res.sendFile(fullPath);
+    }
+    
+    // Se não encontrou o arquivo, tenta index.html como fallback
+    const indexPath = path.join(exportDir, 'index.html');
+    if (existsSync(indexPath)) {
+      console.log(`↪️  Fallback para index.html`);
+      return res.sendFile(indexPath);
     }
   }
   
-  if (htmlFile) {
-    console.log(`Serving HTML from: ${htmlFile}`);
-    return res.sendFile(htmlFile);
+  // Se chegou aqui, não temos export estático ou não encontramos o arquivo
+  // Tenta servir do build normal do Next.js
+  if (existsSync(nextBuildDir)) {
+    console.log(`⚠️  Tentando servir do build normal`);
+    
+    // Tenta servir index.html da raiz do web
+    const webIndexPath = path.join(webDir, 'index.html');
+    if (existsSync(webIndexPath)) {
+      console.log(`✅ Servindo index.html do web dir`);
+      return res.sendFile(webIndexPath);
+    }
   }
   
-  // Fallback: se não encontrou, serve página de dashboard
-  console.log('No HTML file found, serving dashboard');
+  // Fallback: dashboard informativo
+  console.log(`❌ Nenhum arquivo frontend encontrado, servindo dashboard`);
+  serveNoBuildDashboard(res);
+});
+
+// Dashboard quando não há build
+function serveNoBuildDashboard(res) {
+  const hasExport = existsSync(exportDir);
+  const hasBuild = existsSync(nextBuildDir);
+  
   res.send(`
-    <!DOCTYPE html>
-    <html>
-      <head>
-        <title>WhatsApp SaaS Dashboard</title>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <style>
-          * { margin: 0; padding: 0; box-sizing: border-box; }
-          body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WhatsApp SaaS - Configuração</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+        
+        body {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
             display: flex;
             align-items: center;
             justify-content: center;
-            padding: 20px;
-          }
-          .container {
-            background: white;
-            border-radius: 20px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-            max-width: 800px;
-            width: 100%;
-            overflow: hidden;
-          }
-          .header {
-            background: linear-gradient(135deg, #1e40af 0%, #1e3a8a 100%);
+            padding: 2rem;
             color: white;
-            padding: 40px;
-            text-align: center;
-          }
-          .header h1 {
+        }
+        
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 1.5rem;
+            padding: 3rem;
+            max-width: 900px;
+            width: 100%;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+        
+        h1 {
             font-size: 2.5rem;
-            margin-bottom: 10px;
-          }
-          .header p {
+            margin-bottom: 1rem;
+            text-align: center;
+        }
+        
+        .subtitle {
+            text-align: center;
             opacity: 0.9;
+            margin-bottom: 2rem;
             font-size: 1.1rem;
-          }
-          .content {
-            padding: 40px;
-          }
-          .status-cards {
+        }
+        
+        .status-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 20px;
-            margin-bottom: 40px;
-          }
-          .card {
-            background: #f8fafc;
-            border-radius: 15px;
-            padding: 25px;
-            border-left: 5px solid #3b82f6;
-            transition: transform 0.3s, box-shadow 0.3s;
-          }
-          .card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
-          }
-          .card h3 {
-            color: #1e40af;
-            margin-bottom: 15px;
-            font-size: 1.3rem;
-          }
-          .card p {
-            color: #475569;
-            line-height: 1.6;
-          }
-          .card ul {
-            list-style: none;
-            margin-top: 15px;
-          }
-          .card li {
-            padding: 8px 0;
-            border-bottom: 1px solid #e2e8f0;
-          }
-          .card li:last-child {
-            border-bottom: none;
-          }
-          .card a {
-            color: #3b82f6;
-            text-decoration: none;
-            font-weight: 500;
-          }
-          .card a:hover {
-            text-decoration: underline;
-          }
-          .api-list {
-            background: #f1f5f9;
-            border-radius: 15px;
-            padding: 30px;
-            margin-top: 30px;
-          }
-          .api-list h3 {
-            color: #1e40af;
-            margin-bottom: 20px;
+            gap: 1rem;
+            margin: 2rem 0;
+        }
+        
+        .status-card {
+            background: rgba(255, 255, 255, 0.15);
+            border-radius: 1rem;
+            padding: 1.5rem;
+            text-align: center;
+        }
+        
+        .status-title {
+            font-size: 1.1rem;
+            margin-bottom: 0.5rem;
+            opacity: 0.9;
+        }
+        
+        .status-value {
             font-size: 1.5rem;
-          }
-          .endpoint {
-            background: white;
-            border-radius: 10px;
-            padding: 15px;
-            margin-bottom: 10px;
+            font-weight: bold;
+        }
+        
+        .good {
+            color: #4ade80;
+        }
+        
+        .bad {
+            color: #f87171;
+        }
+        
+        .warning {
+            color: #fbbf24;
+        }
+        
+        .instructions {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 1rem;
+            padding: 1.5rem;
+            margin: 2rem 0;
+        }
+        
+        .instructions h3 {
+            margin-bottom: 1rem;
+            color: #93c5fd;
             display: flex;
             align-items: center;
-            border: 1px solid #e2e8f0;
-          }
-          .method {
-            display: inline-block;
-            padding: 5px 12px;
-            border-radius: 6px;
-            font-weight: bold;
-            font-size: 0.9rem;
-            margin-right: 15px;
-            min-width: 70px;
-            text-align: center;
-          }
-          .method.get { background: #dbeafe; color: #1d4ed8; }
-          .method.post { background: #dcfce7; color: #166534; }
-          .path {
+            gap: 0.5rem;
+        }
+        
+        code {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
             font-family: 'Courier New', monospace;
-            color: #475569;
-            flex-grow: 1;
-          }
-          .test-btn {
+            display: block;
+            margin: 0.5rem 0;
+            overflow-x: auto;
+        }
+        
+        .endpoints {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin: 2rem 0;
+        }
+        
+        .endpoint-card {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 0.75rem;
+            padding: 1rem;
+            transition: transform 0.3s;
+        }
+        
+        .endpoint-card:hover {
+            transform: translateY(-4px);
+            background: rgba(255, 255, 255, 0.15);
+        }
+        
+        .method {
+            display: inline-block;
+            padding: 0.25rem 0.5rem;
+            border-radius: 0.375rem;
+            font-size: 0.75rem;
+            font-weight: bold;
+            margin-bottom: 0.5rem;
+        }
+        
+        .get { background: #10b981; }
+        .post { background: #3b82f6; }
+        
+        .path {
+            font-family: 'Courier New', monospace;
+            font-size: 0.9rem;
+            word-break: break-all;
+        }
+        
+        a {
+            color: #93c5fd;
+            text-decoration: none;
+        }
+        
+        a:hover {
+            color: #bfdbfe;
+            text-decoration: underline;
+        }
+        
+        .actions {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            margin-top: 2rem;
+            flex-wrap: wrap;
+        }
+        
+        .btn {
+            padding: 0.75rem 1.5rem;
             background: #3b82f6;
             color: white;
             border: none;
-            padding: 8px 16px;
-            border-radius: 8px;
+            border-radius: 0.75rem;
+            font-weight: 600;
             cursor: pointer;
-            font-weight: 500;
-            transition: background 0.3s;
-          }
-          .test-btn:hover {
+            transition: all 0.3s;
+            text-decoration: none;
+            display: inline-block;
+        }
+        
+        .btn:hover {
             background: #2563eb;
-          }
-          .footer {
-            text-align: center;
-            padding: 20px;
-            color: #64748b;
-            font-size: 0.9rem;
-            border-top: 1px solid #e2e8f0;
-          }
-        </style>
-        <script>
-          async function testEndpoint(endpoint) {
-            try {
-              const response = await fetch(endpoint);
-              const data = await response.json();
-              alert(JSON.stringify(data, null, 2));
-            } catch (error) {
-              alert('Error: ' + error.message);
-            }
-          }
-          
-          async function checkAllEndpoints() {
-            const endpoints = [
-              '/api/health',
-              '/api/status',
-              '/api/version',
-              '/api/debug-files'
-            ];
-            
-            const results = [];
-            for (const endpoint of endpoints) {
-              try {
-                const response = await fetch(endpoint);
-                results.push({
-                  endpoint,
-                  status: response.status,
-                  ok: response.ok
-                });
-              } catch (error) {
-                results.push({
-                  endpoint,
-                  error: error.message
-                });
-              }
-            }
-            
-            alert('Test Results:\\n' + results.map(r => 
-              r.error ? \`❌ \${r.endpoint}: \${r.error}\` : 
-              r.ok ? \`✅ \${r.endpoint}: HTTP \${r.status}\` :
-              \`⚠️  \${r.endpoint}: HTTP \${r.status}\`
-            ).join('\\n'));
-          }
-        </script>
-      </head>
-      <body>
-        <div class="container">
-          <div class="header">
-            <h1>🚀 WhatsApp SaaS</h1>
-            <p>API Status Dashboard</p>
-          </div>
-          
-          <div class="content">
-            <div class="status-cards">
-              <div class="card">
-                <h3>📊 API Status</h3>
-                <p>Verifique o status da API e seus endpoints</p>
-                <ul>
-                  <li><a href="/api/health" target="_blank">Health Check</a></li>
-                  <li><a href="/api/status" target="_blank">Status Completo</a></li>
-                  <li><a href="/api/version" target="_blank">Versão</a></li>
-                </ul>
-              </div>
-              
-              <div class="card">
-                <h3>🔧 Debug Tools</h3>
-                <p>Ferramentas para diagnóstico e solução de problemas</p>
-                <ul>
-                  <li><a href="/api/debug-files" target="_blank">Estrutura de Arquivos</a></li>
-                  <li><button class="test-btn" onclick="checkAllEndpoints()">Testar Todos Endpoints</button></li>
-                </ul>
-              </div>
-              
-              <div class="card">
-                <h3>📚 Documentação</h3>
-                <p>Recursos e links úteis</p>
-                <ul>
-                  <li><a href="/api" target="_blank">Lista de Endpoints</a></li>
-                  <li><a href="#" onclick="alert('Documentação em desenvolvimento')">API Docs</a></li>
-                  <li><a href="https://github.com" target="_blank">GitHub</a></li>
-                </ul>
-              </div>
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
+        }
+        
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚀 WhatsApp SaaS</h1>
+        <p class="subtitle">Backend funcionando! Configurando frontend...</p>
+        
+        <div class="status-grid">
+            <div class="status-card">
+                <div class="status-title">Backend API</div>
+                <div class="status-value good">✅ Online</div>
             </div>
             
-            <div class="api-list">
-              <h3>🌐 Endpoints da API</h3>
-              
-              <div class="endpoint">
-                <span class="method get">GET</span>
-                <span class="path">/api</span>
-                <button class="test-btn" onclick="testEndpoint('/api')">Testar</button>
-              </div>
-              
-              <div class="endpoint">
-                <span class="method get">GET</span>
-                <span class="path">/api/health</span>
-                <button class="test-btn" onclick="testEndpoint('/api/health')">Testar</button>
-              </div>
-              
-              <div class="endpoint">
-                <span class="method get">GET</span>
-                <span class="path">/api/status</span>
-                <button class="test-btn" onclick="testEndpoint('/api/status')">Testar</button>
-              </div>
-              
-              <div class="endpoint">
-                <span class="method get">GET</span>
-                <span class="path">/api/version</span>
-                <button class="test-btn" onclick="testEndpoint('/api/version')">Testar</button>
-              </div>
-              
-              <div class="endpoint">
-                <span class="method get">GET</span>
-                <span class="path">/api/debug-files</span>
-                <button class="test-btn" onclick="testEndpoint('/api/debug-files')">Testar</button>
-              </div>
-              
-              <div class="endpoint">
-                <span class="method post">POST</span>
-                <span class="path">/api/auth/register</span>
-                <button class="test-btn" onclick="alert('Require POST request with JSON body')">Info</button>
-              </div>
-              
-              <div class="endpoint">
-                <span class="method post">POST</span>
-                <span class="path">/api/auth/login</span>
-                <button class="test-btn" onclick="alert('Require POST request with JSON body')">Info</button>
-              </div>
+            <div class="status-card">
+                <div class="status-title">Next.js Export</div>
+                <div class="status-value ${hasExport ? 'good' : 'bad'}">
+                    ${hasExport ? '✅ Encontrado' : '❌ Não encontrado'}
+                </div>
             </div>
-          </div>
-          
-          <div class="footer">
-            <p>WhatsApp SaaS Dashboard • Backend Online • ${new Date().toLocaleString()}</p>
-            <p style="margin-top: 5px; font-size: 0.8rem;">Acesse diretamente os endpoints em /api/*</p>
-          </div>
+            
+            <div class="status-card">
+                <div class="status-title">Next.js Build</div>
+                <div class="status-value ${hasBuild ? 'warning' : 'bad'}">
+                    ${hasBuild ? '⚠️  Encontrado' : '❌ Não encontrado'}
+                </div>
+            </div>
+            
+            <div class="status-card">
+                <div class="status-title">Status CSS</div>
+                <div class="status-value ${hasExport || hasBuild ? 'warning' : 'bad'}">
+                    ${hasExport || hasBuild ? '🔄 Carregando' : '❌ Indisponível'}
+                </div>
+            </div>
         </div>
-      </body>
-    </html>
-  `);
-});
+        
+        <div class="instructions">
+            <h3>📋 Para configurar o frontend:</h3>
+            
+            ${!hasExport ? `
+            <p><strong>1. Configure o Next.js para export estático:</strong></p>
+            <code>// Em apps/web/next.config.js
+module.exports = {
+  output: 'export', // Adicione esta linha
+  reactStrictMode: true,
+  images: { unoptimized: true }
+}</code>
+            
+            <p><strong>2. Rebuild o Next.js:</strong></p>
+            <code>cd apps/web && npm run build</code>
+            
+            <p><strong>3. Verifique se a pasta 'out' foi criada:</strong></p>
+            <code>ls apps/web/out/</code>
+            ` : `
+            <p><strong>✅ Frontend estático configurado!</strong></p>
+            <p>O Next.js export está funcionando corretamente.</p>
+            `}
+            
+            ${hasBuild && !hasExport ? `
+            <p><strong>⚠️  AVISO: Build normal encontrado, mas export não.</strong></p>
+            <p>Recomendamos usar 'output: export' para melhor compatibilidade.</p>
+            ` : ''}
+        </div>
+        
+        <div class="endpoints">
+            <div class="endpoint-card">
+                <span class="method get">GET</span>
+                <div class="path"><a href="/api/health" target="_blank">/api/health</a></div>
+                <p style="opacity: 0.9; margin-top: 0.5rem; font-size: 0.9rem;">Verificar saúde</p>
+            </div>
+            
+            <div class="endpoint-card">
+                <span class="method get">GET</span>
+                <div class="path"><a href="/api/status" target="_blank">/api/status</a></div>
+                <p style="opacity: 0.9; margin-top: 0.5rem; font-size: 0.9rem;">Status completo</p>
+            </div>
+            
+            <div class="endpoint-card">
+                <span class="method get">GET</span>
+                <div class="path"><a href="/api" target="_blank">/api</a></div>
+                <p style="opacity: 0.9; margin-top: 0.5rem; font-size: 0.9rem;">Documentação</p>
+            </div>
+            
+            <div class="endpoint-card">
+                <span class="method get">GET</span>
+                <div class="path"><a href="/api/render-debug" target="_blank">/api/render-debug</a></div>
+                <p style="opacity: 0.9; margin-top: 0.5rem; font-size: 0.9rem;">Debug do sistema</p>
+            </div>
+        </div>
+        
+        <div class="actions">
+            <a href="/api" class="btn">📚 Ver Documentação</a>
+            <button onclick="window.location.reload()" class="btn">🔄 Recarregar</button>
+            <a href="/api/render-debug" target="_blank" class="btn btn-secondary">🐛 Debug</a>
+        </div>
+    </div>
+</body>
+</html>`);
+}
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`WhatsApp SaaS API running on port ${PORT}`);
-  console.log(`Sessions directory: ${sessionsDir}`);
-  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-  console.log(`JWT Secret: ${process.env.JWT_SECRET ? 'Set' : 'Using default'}`);
+  console.log('=========================================');
+  console.log(`🚀 WhatsApp SaaS API iniciada na porta ${PORT}`);
+  console.log(`🌐 Ambiente: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`📁 Sessions: ${sessionsDir}`);
+  console.log(`🖥️  Frontend Export: ${existsSync(exportDir) ? '✅ Encontrado' : '❌ Não encontrado'}`);
+  console.log(`🖥️  Frontend Build: ${existsSync(nextBuildDir) ? '✅ Encontrado' : '❌ Não encontrado'}`);
+  console.log('=========================================');
+  console.log(`👉 Acesse: http://localhost:${PORT}`);
+  console.log(`👉 API: http://localhost:${PORT}/api`);
+  console.log(`👉 Debug: http://localhost:${PORT}/api/render-debug`);
+  console.log('=========================================');
 });

@@ -1,26 +1,30 @@
-FROM node:20
+FROM node:20-alpine
 
 WORKDIR /app
 
-# Copia manifests
-COPY package.json ./
-COPY apps/web/package.json apps/web/package.json
+# Copia arquivos de dependências
+COPY package*.json ./
+COPY apps/web/package*.json apps/web/
 
-# Instala deps da raiz e do frontend
-RUN npm install && cd apps/web && npm install
+# Instala dependências
+RUN npm install
 
-# Copia o resto do projeto
+# Copia todo o código
 COPY . .
 
 # Build do frontend
+WORKDIR /app/apps/web
 RUN npm run build
 
-# Prisma
+# Volta para raiz
+WORKDIR /app
+
+# Gera Prisma
 RUN npx prisma generate
 
-# Cria diretório para sessions
+# Cria diretório de sessions
 RUN mkdir -p sessions
 
 EXPOSE 3000
 
-CMD ["npm", "run", "start"]
+CMD ["npm", "start"]

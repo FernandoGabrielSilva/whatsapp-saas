@@ -2,8 +2,11 @@
   "name": "whatsapp-saas-single",
   "type": "module",
   "scripts": {
+    "dev": "nodemon apps/api/src/index.js",
     "start": "node apps/api/src/index.js",
-    "build": "cd apps/web && npm install && npm run build && cd ../.. && npx prisma generate"
+    "build": "cd apps/web && npm install && npm run build",
+    "build:all": "npm install && cd apps/web && npm install && npm run build && npx prisma generate",
+    "render:build": "npm ci && cd apps/web && npm ci && npm run build && cd ../.. && npx prisma generate"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
