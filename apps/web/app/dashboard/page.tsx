@@ -8,9 +8,13 @@ import QRCode from 'qrcode';
 interface Instance {
   id: string;
   name: string;
-  status: string;
-  connectionStatus?: string;
-  hasQr?: boolean;
+  userId: string;
+  createdAt: string;
+  updatedAt: string;
+  connectionStatus: string;
+  hasQr: boolean;
+  inMemory: boolean;
+  isConnected: boolean;
 }
 
 export default function DashboardPage() {
@@ -23,6 +27,7 @@ export default function DashboardPage() {
   const [qrCodeImage, setQrCodeImage] = useState('');
   const [qrLoading, setQrLoading] = useState(false);
   const [sendMessageLoading, setSendMessageLoading] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
   const [messageData, setMessageData] = useState({
     phone: '',
     text: ''
@@ -56,6 +61,14 @@ export default function DashboardPage() {
 
       const data = await response.json();
       setInstances(data);
+      
+      // Se há uma instância selecionada, atualiza seus dados
+      if (selectedInstance) {
+        const updatedInstance = data.find((inst: Instance) => inst.id === selectedInstance.id);
+        if (updatedInstance) {
+          setSelectedInstance(updatedInstance);
+        }
+      }
     } catch (error) {
       console.error('Erro ao buscar instâncias:', error);
     } finally {
@@ -64,7 +77,10 @@ export default function DashboardPage() {
   };
 
   const handleCreateInstance = async () => {
-    if (!newInstanceName.trim()) return;
+    if (!newInstanceName.trim()) {
+      alert('Digite um nome para a instância');
+      return;
+    }
 
     setCreatingInstance(true);
     try {
@@ -82,19 +98,32 @@ export default function DashboardPage() {
       
       if (response.ok) {
         setNewInstanceName('');
-        fetchInstances();
+        await fetchInstances();
         
         // Seleciona a nova instância automaticamente
         const newInstance = {
           id: data.id,
           name: data.name,
-          status: data.status
+          userId: '',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          connectionStatus: 'disconnected',
+          hasQr: data.hasQr || false,
+          inMemory: true,
+          isConnected: false
         };
         setSelectedInstance(newInstance);
-        await fetchQRCode(data.id);
+        
+        // Aguarda um pouco e tenta buscar o QR code
+        setTimeout(() => {
+          fetchQRCode(data.id);
+        }, 1000);
+      } else {
+        alert(`Erro: ${data.error || 'Falha ao criar instância'}`);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Erro ao criar instância:', error);
+      alert(`Erro: ${error.message}`);
     } finally {
       setCreatingInstance(false);
     }
@@ -114,6 +143,18 @@ export default function DashboardPage() {
 
       const data = await response.json();
       
+      if (!response.ok) {
+        if (response.status === 404) {
+          // Instância não encontrada na memória
+          const reconnect = confirm('Instância não está ativa. Deseja reconectar?');
+          if (reconnect) {
+            await reconnectInstance(instanceId);
+          }
+          return;
+        }
+        throw new Error(data.error || 'Erro ao buscar QR code');
+      }
+      
       if (data.qrImage) {
         setQrCodeImage(data.qrImage);
       } else if (data.qr) {
@@ -121,28 +162,86 @@ export default function DashboardPage() {
         const qrImage = await QRCode.toDataURL(data.qr);
         setQrCodeImage(qrImage);
       } else if (data.status === 'connected') {
-        alert('Instância já está conectada!');
+        setQrCodeImage('');
+        alert('Instância já está conectada ao WhatsApp!');
+        await fetchInstances(); // Atualiza status
+      } else if (data.status === 'waiting') {
+        // QR ainda não gerado, tenta novamente após 2 segundos
+        setTimeout(() => {
+          fetchQRCode(instanceId);
+        }, 2000);
+      } else if (data.status === 'disconnected') {
+        alert('Instância desconectada. Tente reconectar.');
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Erro ao buscar QR code:', error);
+      alert(`Erro: ${error.message}`);
     } finally {
       setQrLoading(false);
     }
   };
 
+  const reconnectInstance = async (instanceId: string) => {
+    setReconnecting(true);
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(`/api/instances/${instanceId}/reconnect`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(data.error || 'Falha ao reconectar instância');
+      }
+      
+      alert('Instância sendo reconectada... Aguarde alguns segundos.');
+      
+      // Atualiza a lista de instâncias
+      await fetchInstances();
+      
+      // Aguarda e tenta buscar o QR code
+      setTimeout(() => {
+        fetchQRCode(instanceId);
+      }, 2000);
+      
+    } catch (error: any) {
+      console.error('Erro ao reconectar:', error);
+      alert(`Erro: ${error.message}`);
+    } finally {
+      setReconnecting(false);
+    }
+  };
+
   const handleSelectInstance = async (instance: Instance) => {
     setSelectedInstance(instance);
+    setQrCodeImage('');
     
-    if (instance.hasQr || instance.connectionStatus !== 'connected') {
+    // Se a instância não está conectada e está em memória, busca QR code
+    if (!instance.isConnected && instance.inMemory) {
       await fetchQRCode(instance.id);
-    } else {
-      setQrCodeImage('');
     }
   };
 
   const handleSendMessage = async () => {
-    if (!selectedInstance || !messageData.phone.trim() || !messageData.text.trim()) {
+    if (!selectedInstance) {
+      alert('Selecione uma instância primeiro');
+      return;
+    }
+
+    if (!messageData.phone.trim() || !messageData.text.trim()) {
       alert('Preencha todos os campos');
+      return;
+    }
+
+    // Validação do número de telefone
+    const phoneRegex = /^\d{10,15}$/;
+    if (!phoneRegex.test(messageData.phone.replace(/\D/g, ''))) {
+      alert('Número de telefone inválido. Use apenas dígitos (10-15 caracteres)');
       return;
     }
 
@@ -157,7 +256,7 @@ export default function DashboardPage() {
         },
         body: JSON.stringify({
           instanceId: selectedInstance.id,
-          phone: messageData.phone,
+          phone: messageData.phone.replace(/\D/g, ''),
           text: messageData.text
         })
       });
@@ -165,13 +264,13 @@ export default function DashboardPage() {
       const data = await response.json();
       
       if (response.ok) {
-        alert('Mensagem enviada com sucesso!');
+        alert('✅ Mensagem enviada com sucesso!');
         setMessageData({ phone: '', text: '' });
       } else {
-        alert(`Erro: ${data.error || 'Falha ao enviar mensagem'}`);
+        alert(`❌ Erro: ${data.error || 'Falha ao enviar mensagem'}`);
       }
     } catch (error: any) {
-      alert(`Erro: ${error.message}`);
+      alert(`❌ Erro: ${error.message}`);
     } finally {
       setSendMessageLoading(false);
     }
@@ -181,6 +280,11 @@ export default function DashboardPage() {
     localStorage.removeItem('token');
     localStorage.removeItem('userEmail');
     router.push('/');
+  };
+
+  const refreshInstances = async () => {
+    setLoading(true);
+    await fetchInstances();
   };
 
   if (loading) {
@@ -213,6 +317,12 @@ export default function DashboardPage() {
               Home
             </Link>
             <button
+              onClick={refreshInstances}
+              className="px-4 py-2 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition"
+            >
+              Atualizar
+            </button>
+            <button
               onClick={handleLogout}
               className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition"
             >
@@ -229,9 +339,18 @@ export default function DashboardPage() {
             <div className="bg-white rounded-xl shadow-sm p-6">
               <div className="flex justify-between items-center mb-6">
                 <h2 className="text-xl font-semibold text-gray-900">Suas Instâncias</h2>
-                <span className="text-sm text-gray-500 bg-gray-100 px-3 py-1 rounded-full">
-                  {instances.length} instância(s)
-                </span>
+                <div className="flex items-center space-x-2">
+                  <span className="text-sm text-gray-500 bg-gray-100 px-3 py-1 rounded-full">
+                    {instances.length} instância(s)
+                  </span>
+                  <button
+                    onClick={refreshInstances}
+                    className="text-sm text-blue-600 hover:text-blue-800"
+                    title="Atualizar lista"
+                  >
+                    🔄
+                  </button>
+                </div>
               </div>
 
               <div className="mb-6">
@@ -242,6 +361,7 @@ export default function DashboardPage() {
                     onChange={(e) => setNewInstanceName(e.target.value)}
                     placeholder="Nome da instância"
                     className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
+                    onKeyPress={(e) => e.key === 'Enter' && handleCreateInstance()}
                   />
                   <button
                     onClick={handleCreateInstance}
@@ -260,7 +380,7 @@ export default function DashboardPage() {
                 </p>
               </div>
 
-              <div className="space-y-3">
+              <div className="space-y-3 max-h-96 overflow-y-auto">
                 {instances.length === 0 ? (
                   <div className="text-center py-8 text-gray-500">
                     <p>Nenhuma instância criada ainda</p>
@@ -278,20 +398,34 @@ export default function DashboardPage() {
                       }`}
                     >
                       <div className="flex justify-between items-start">
-                        <div>
+                        <div className="flex-1">
                           <h3 className="font-medium text-gray-900">{instance.name}</h3>
                           <div className="flex items-center mt-1 space-x-2">
                             <span className={`inline-block w-2 h-2 rounded-full ${
-                              instance.connectionStatus === 'connected'
+                              instance.isConnected
                                 ? 'bg-green-500'
-                                : 'bg-yellow-500'
+                                : instance.hasQr
+                                ? 'bg-yellow-500'
+                                : 'bg-red-500'
                             }`}></span>
                             <span className="text-sm text-gray-600">
-                              {instance.connectionStatus === 'connected' ? 'Conectado' : 'Desconectado'}
+                              {instance.isConnected 
+                                ? 'Conectado' 
+                                : instance.hasQr 
+                                ? 'QR Disponível' 
+                                : 'Desconectado'}
                             </span>
+                            {!instance.inMemory && (
+                              <span className="text-xs bg-red-100 text-red-800 px-2 py-0.5 rounded">
+                                Offline
+                              </span>
+                            )}
                           </div>
+                          <p className="text-xs text-gray-500 mt-1">
+                            ID: {instance.id.substring(0, 8)}...
+                          </p>
                         </div>
-                        {instance.hasQr && instance.connectionStatus !== 'connected' && (
+                        {instance.hasQr && !instance.isConnected && (
                           <span className="text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded">
                             QR Pendente
                           </span>
@@ -322,6 +456,9 @@ export default function DashboardPage() {
                     Comece a enviar mensagens
                   </li>
                 </ol>
+                <div className="mt-4 text-xs text-gray-500">
+                  <p>⚠️ As instâncias ficam apenas em memória. Reiniciar o servidor desconecta todas.</p>
+                </div>
               </div>
             </div>
           </div>
@@ -330,12 +467,35 @@ export default function DashboardPage() {
           <div className="lg:col-span-2 space-y-8">
             {/* QR Code Section */}
             <div className="bg-white rounded-xl shadow-sm p-6">
-              <h2 className="text-xl font-semibold text-gray-900 mb-4">
-                {selectedInstance ? `QR Code - ${selectedInstance.name}` : 'Selecione uma Instância'}
-              </h2>
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-xl font-semibold text-gray-900">
+                  {selectedInstance ? `QR Code - ${selectedInstance.name}` : 'Selecione uma Instância'}
+                </h2>
+                {selectedInstance && (
+                  <div className="flex items-center space-x-2">
+                    <span className={`inline-block w-2 h-2 rounded-full ${
+                      selectedInstance.isConnected
+                        ? 'bg-green-500'
+                        : selectedInstance.hasQr
+                        ? 'bg-yellow-500'
+                        : 'bg-red-500'
+                    }`}></span>
+                    <span className="text-sm text-gray-600">
+                      {selectedInstance.isConnected 
+                        ? 'Conectado' 
+                        : selectedInstance.hasQr 
+                        ? 'QR Disponível' 
+                        : 'Desconectado'}
+                    </span>
+                  </div>
+                )}
+              </div>
 
               {!selectedInstance ? (
                 <div className="text-center py-12 text-gray-500">
+                  <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <span className="text-gray-400 text-2xl">📱</span>
+                  </div>
                   <p>Selecione uma instância à esquerda para ver o QR code</p>
                 </div>
               ) : qrLoading ? (
@@ -355,38 +515,89 @@ export default function DashboardPage() {
                   <p className="mt-4 text-sm text-gray-600">
                     Escaneie este QR code com o WhatsApp no seu celular
                   </p>
-                  <button
-                    onClick={() => fetchQRCode(selectedInstance.id)}
-                    className="mt-4 px-4 py-2 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition"
-                  >
-                    Atualizar QR Code
-                  </button>
+                  <div className="mt-4 space-x-2">
+                    <button
+                      onClick={() => fetchQRCode(selectedInstance.id)}
+                      className="px-4 py-2 text-sm bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition"
+                    >
+                      Atualizar QR Code
+                    </button>
+                    <button
+                      onClick={() => reconnectInstance(selectedInstance.id)}
+                      disabled={reconnecting}
+                      className={`px-4 py-2 text-sm rounded-lg transition ${
+                        reconnecting
+                          ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                          : 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200'
+                      }`}
+                    >
+                      {reconnecting ? 'Reconectando...' : 'Reconectar Instância'}
+                    </button>
+                  </div>
+                  <p className="mt-4 text-xs text-gray-500">
+                    O QR code expira após alguns minutos. Se expirar, clique em "Atualizar QR Code"
+                  </p>
                 </div>
-              ) : selectedInstance.connectionStatus === 'connected' ? (
+              ) : selectedInstance.isConnected ? (
                 <div className="text-center py-12">
                   <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
                     <span className="text-green-600 text-2xl">✓</span>
                   </div>
                   <h3 className="text-lg font-medium text-gray-900 mb-2">Conectado!</h3>
-                  <p className="text-gray-600">
+                  <p className="text-gray-600 mb-4">
                     Esta instância está conectada ao WhatsApp e pronta para uso.
                   </p>
+                  <div className="space-x-2">
+                    <button
+                      onClick={() => fetchQRCode(selectedInstance.id)}
+                      className="px-4 py-2 text-sm bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition"
+                    >
+                      Verificar Status
+                    </button>
+                    <button
+                      onClick={() => reconnectInstance(selectedInstance.id)}
+                      className="px-4 py-2 text-sm bg-yellow-100 text-yellow-700 rounded-lg hover:bg-yellow-200 transition"
+                    >
+                      Reconectar
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <div className="text-center py-12">
-                  <div className="w-16 h-16 bg-yellow-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                    <span className="text-yellow-600 text-2xl">!</span>
+                  <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <span className="text-gray-400 text-2xl">⏳</span>
                   </div>
                   <h3 className="text-lg font-medium text-gray-900 mb-2">Aguardando QR Code</h3>
                   <p className="text-gray-600 mb-4">
-                    Clique no botão abaixo para gerar o QR code.
+                    {selectedInstance.inMemory
+                      ? 'O QR code será gerado automaticamente. Clique no botão abaixo para verificar.'
+                      : 'Esta instância não está ativa na memória. Reconecte para gerar um novo QR code.'}
                   </p>
-                  <button
-                    onClick={() => fetchQRCode(selectedInstance.id)}
-                    className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
-                  >
-                    Gerar QR Code
-                  </button>
+                  <div className="space-x-2">
+                    <button
+                      onClick={() => fetchQRCode(selectedInstance.id)}
+                      className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition"
+                    >
+                      Verificar QR Code
+                    </button>
+                    <button
+                      onClick={() => reconnectInstance(selectedInstance.id)}
+                      disabled={reconnecting}
+                      className={`px-4 py-2 rounded-lg transition ${
+                        reconnecting
+                          ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                          : 'bg-yellow-600 text-white hover:bg-yellow-700'
+                      }`}
+                    >
+                      {reconnecting ? 'Reconectando...' : 'Reconectar'}
+                    </button>
+                  </div>
+                  {!selectedInstance.inMemory && (
+                    <p className="mt-4 text-xs text-red-600">
+                      ⚠️ Esta instância não está ativa na memória do servidor. 
+                      Isso pode acontecer após reiniciar o servidor.
+                    </p>
+                  )}
                 </div>
               )}
             </div>
@@ -399,7 +610,7 @@ export default function DashboardPage() {
                 <div className="text-center py-8 text-gray-500">
                   <p>Selecione uma instância conectada para enviar mensagens</p>
                 </div>
-              ) : selectedInstance.connectionStatus !== 'connected' ? (
+              ) : !selectedInstance.isConnected ? (
                 <div className="text-center py-8">
                   <div className="w-12 h-12 bg-yellow-100 rounded-full flex items-center justify-center mx-auto mb-4">
                     <span className="text-yellow-600 text-xl">⚠️</span>
@@ -408,7 +619,9 @@ export default function DashboardPage() {
                     Esta instância não está conectada ao WhatsApp.
                   </p>
                   <p className="text-gray-600 text-sm mt-2">
-                    Conecte-a usando o QR code acima para começar a enviar mensagens.
+                    {selectedInstance.hasQr 
+                      ? 'Escaneie o QR code acima para conectar.'
+                      : 'Reconecte a instância para gerar um QR code.'}
                   </p>
                 </div>
               ) : (
@@ -445,6 +658,9 @@ export default function DashboardPage() {
                   <div className="flex justify-between items-center">
                     <div className="text-sm text-gray-600">
                       Instância: <span className="font-medium">{selectedInstance.name}</span>
+                      {selectedInstance.isConnected && (
+                        <span className="ml-2 text-green-600">● Conectado</span>
+                      )}
                     </div>
                     <button
                       onClick={handleSendMessage}

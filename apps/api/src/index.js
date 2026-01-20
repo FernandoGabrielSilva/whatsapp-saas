@@ -4,13 +4,14 @@ import jwt from "jsonwebtoken";
 import qrcode from "qrcode";
 
 import { PrismaClient } from "@prisma/client";
-import makeWASocket, { useMultiFileAuthState } from "baileys";
+import { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, Browsers } from "@whiskeysockets/baileys";
 import PQueue from "p-queue";
 
 import {
   readdirSync,
   statSync,
-  existsSync
+  existsSync,
+  mkdirSync
 } from "fs";
 
 import { fileURLToPath } from "url";
@@ -21,6 +22,13 @@ const __dirname = path.dirname(__filename);
 const app = express();
 app.use(express.json());
 
+// Garante que a pasta sessions existe
+const sessionsDir = path.join(__dirname, '../../../sessions');
+if (!existsSync(sessionsDir)) {
+  mkdirSync(sessionsDir, { recursive: true });
+  console.log(`Created sessions directory: ${sessionsDir}`);
+}
+
 const prisma = new PrismaClient();
 const queue = new PQueue({interval:2000, intervalCap:1});
 const instances = new Map();
@@ -29,9 +37,136 @@ function auth(req,res,next){
   const h=req.headers.authorization;
   if(!h) return res.sendStatus(401);
   try{
-    req.user=jwt.verify(h.replace("Bearer ",""), process.env.JWT_SECRET);
+    req.user=jwt.verify(h.replace("Bearer ",""), process.env.JWT_SECRET || "default_secret_key");
     next();
-  }catch{ res.sendStatus(401);}
+  }catch(err){
+    console.error("Auth error:", err);
+    res.sendStatus(401);
+  }
+}
+
+// Função para criar socket
+async function createWhatsAppSocket(instanceId, sessionPath) {
+  try {
+    const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+    
+    // Busca a versão mais recente do WhatsApp Web
+    const { version, isLatest } = await fetchLatestBaileysVersion();
+    console.log(`Using WhatsApp Web version: ${version.join('.')}, isLatest: ${isLatest}`);
+    
+    const sock = makeWASocket({
+      version,
+      auth: {
+        creds: state.creds,
+        keys: makeCacheableSignalKeyStore(state.keys, { log: console }),
+      },
+      printQRInTerminal: false,
+      browser: Browsers.ubuntu('Chrome'),
+      markOnlineOnConnect: false,
+      syncFullHistory: false,
+      generateHighQualityLinkPreview: true,
+      emitOwnEvents: true,
+      defaultQueryTimeoutMs: 60000,
+      connectTimeoutMs: 30000,
+      keepAliveIntervalMs: 15000,
+      retryRequestDelayMs: 250,
+      maxMsgRetryCount: 5,
+      fireInitQueries: true,
+      shouldSyncHistoryMessage: () => false,
+      shouldIgnoreJid: (jid) => false,
+      getMessage: async () => undefined,
+      logger: console,
+    });
+    
+    // Listen for QR code
+    sock.ev.on('connection.update', async (update) => {
+      const { connection, qr, lastDisconnect } = update;
+      
+      console.log(`Connection update for instance ${instanceId}:`, connection);
+      
+      if (qr) {
+        console.log(`QR code generated for instance ${instanceId}`);
+        sock.qrCode = qr;
+        
+        // Atualiza o mapa de instâncias
+        const instanceData = instances.get(instanceId);
+        if (instanceData) {
+          instanceData.sock.qrCode = qr;
+          instances.set(instanceId, instanceData);
+        }
+      }
+      
+      if (connection === 'open') {
+        console.log(`✅ Instance ${instanceId} connected successfully!`);
+        sock.isConnected = true;
+        sock.qrCode = null;
+        
+        // Atualiza o mapa
+        const instanceData = instances.get(instanceId);
+        if (instanceData) {
+          instanceData.sock.isConnected = true;
+          instanceData.sock.qrCode = null;
+          instances.set(instanceId, instanceData);
+        }
+      }
+      
+      if (connection === 'close') {
+        console.log(`Instance ${instanceId} disconnected`);
+        sock.isConnected = false;
+        
+        const statusCode = lastDisconnect?.error?.output?.statusCode;
+        const errorMessage = lastDisconnect?.error?.message;
+        
+        console.log(`Disconnect reason: ${statusCode}, ${errorMessage}`);
+        
+        const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+        if (shouldReconnect) {
+          console.log(`Will attempt to reconnect instance ${instanceId} in 5 seconds...`);
+          
+          // Tenta reconectar após 5 segundos
+          setTimeout(async () => {
+            try {
+              console.log(`Attempting to reconnect instance ${instanceId}...`);
+              const newSocket = await createWhatsAppSocket(instanceId, sessionPath);
+              
+              const instanceData = instances.get(instanceId);
+              if (instanceData) {
+                instanceData.sock = newSocket;
+                instances.set(instanceId, instanceData);
+                console.log(`Instance ${instanceId} reconnected`);
+              }
+            } catch (reconnectError) {
+              console.error(`Failed to reconnect instance ${instanceId}:`, reconnectError);
+            }
+          }, 5000);
+        } else {
+          console.log(`Instance ${instanceId} logged out, removing from memory`);
+          instances.delete(instanceId);
+        }
+      }
+    });
+    
+    sock.ev.on("creds.update", saveCreds);
+    
+    // Adiciona tratamento de erros
+    sock.ev.on('connection.give-up', () => {
+      console.log(`Connection give up for instance ${instanceId}`);
+    });
+    
+    sock.ev.on('connection.phone-change', (update) => {
+      console.log(`Phone changed for instance ${instanceId}:`, update);
+    });
+    
+    // Inicializa propriedades do socket
+    sock.qrCode = null;
+    sock.isConnected = false;
+    sock.instanceId = instanceId;
+    
+    return sock;
+  } catch (error) {
+    console.error(`Error creating socket for instance ${instanceId}:`, error);
+    throw error;
+  }
 }
 
 // ============ ENDPOINTS DE API ============
@@ -44,7 +179,8 @@ app.get("/api/status", (req, res) => {
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
     instances: instances.size,
-    environment: process.env.NODE_ENV || "development"
+    environment: process.env.NODE_ENV || "development",
+    memoryUsage: process.memoryUsage()
   });
 });
 
@@ -75,7 +211,9 @@ app.get("/api", (req, res) => {
     { method: "POST", path: "/api/auth/login", description: "Login de usuário" },
     { method: "POST", path: "/api/instances", description: "Criar instância WhatsApp (auth required)" },
     { method: "GET", path: "/api/instances", description: "Listar minhas instâncias (auth required)" },
-    { method: "POST", path: "/api/send", description: "Enviar mensagem (auth required)" }
+    { method: "POST", path: "/api/send", description: "Enviar mensagem (auth required)" },
+    { method: "POST", path: "/api/instances/:id/reconnect", description: "Reconectar instância (auth required)" },
+    { method: "GET", path: "/api/debug/instances", description: "Debug: listar instâncias em memória" }
   ];
   res.json({
     service: "WhatsApp SaaS API",
@@ -98,7 +236,7 @@ app.post("/api/auth/register", async (req,res)=>{
 app.post("/api/auth/login", async (req,res)=>{
   const u=await prisma.user.findUnique({where:{email:req.body.email}});
   if(!u) return res.sendStatus(401);
-  const t=jwt.sign({id:u.id}, process.env.JWT_SECRET,{expiresIn:"7d"});
+  const t=jwt.sign({id:u.id}, process.env.JWT_SECRET || "default_secret_key",{expiresIn:"7d"});
   res.json({token:t});
 });
 
@@ -106,98 +244,210 @@ app.post("/api/auth/login", async (req,res)=>{
 app.post("/api/instances", auth, async (req,res)=>{
   try {
     const inst=await prisma.instance.create({data:{name:req.body.name,userId:req.user.id}});
-    const {state, saveCreds}=await useMultiFileAuthState(`sessions/${inst.id}`);
+    const sessionPath = `sessions/${inst.id}`;
     
-    const sock=makeWASocket({
-      auth: state,
-      printQRInTerminal: false
+    console.log(`Creating session at: ${sessionPath}`);
+    
+    const sock = await createWhatsAppSocket(inst.id, sessionPath);
+    
+    instances.set(inst.id, { 
+      sock, 
+      userId: req.user.id,
+      lastUpdated: new Date(),
+      sessionPath: sessionPath
     });
     
-    // Listen for QR code
-    sock.ev.on('connection.update', (update) => {
-      if (update.qr) {
-        console.log(`QR code for instance ${inst.id}:`, update.qr);
-        // Store QR temporarily (in production, use Redis or similar)
-        sock.qrCode = update.qr;
-      }
-      if (update.connection === 'open') {
-        console.log(`Instance ${inst.id} connected!`);
-        sock.isConnected = true;
-      }
-    });
-    
-    sock.ev.on("creds.update", saveCreds);
-    instances.set(inst.id, { sock, userId: req.user.id });
+    console.log(`Instance created: ${inst.id}, total instances: ${instances.size}`);
     
     res.json({
       id: inst.id,
       name: inst.name,
       status: 'pending_qr',
-      message: 'Instance created. Get QR code at /api/instances/{id}/qr'
+      message: 'Instance created. Get QR code at /api/instances/{id}/qr',
+      hasQr: false
     });
   } catch(error) {
+    console.error('Error creating instance:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
 // Listar instâncias do usuário
 app.get("/api/instances", auth, async (req, res) => {
-  const userInstances = await prisma.instance.findMany({
-    where: { userId: req.user.id }
-  });
-  
-  // Adiciona status de conexão
-  const instancesWithStatus = userInstances.map(inst => {
-    const instanceData = instances.get(inst.id);
-    return {
-      ...inst,
-      connectionStatus: instanceData?.sock.isConnected ? 'connected' : 'disconnected',
-      hasQr: !!instanceData?.sock.qrCode
-    };
-  });
-  
-  res.json(instancesWithStatus);
+  try {
+    const userInstances = await prisma.instance.findMany({
+      where: { userId: req.user.id }
+    });
+    
+    // Adiciona status de conexão
+    const instancesWithStatus = userInstances.map(inst => {
+      const instanceData = instances.get(inst.id);
+      const hasConnection = !!instanceData;
+      const isConnected = instanceData?.sock?.isConnected || false;
+      const hasQr = !!instanceData?.sock?.qrCode;
+      
+      return {
+        id: inst.id,
+        name: inst.name,
+        userId: inst.userId,
+        createdAt: inst.createdAt,
+        updatedAt: inst.updatedAt,
+        connectionStatus: isConnected ? 'connected' : (hasQr ? 'pending_qr' : 'disconnected'),
+        hasQr: hasQr,
+        inMemory: hasConnection,
+        isConnected: isConnected
+      };
+    });
+    
+    res.json(instancesWithStatus);
+  } catch (error) {
+    console.error('Error fetching instances:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // Obter QR code da instância
 app.get("/api/instances/:id/qr", auth, async (req, res) => {
   const instanceId = req.params.id;
+  
+  console.log(`Fetching QR for instance: ${instanceId}`);
+  console.log(`Current instances in memory:`, Array.from(instances.keys()));
+  
   const instanceData = instances.get(instanceId);
   
   if (!instanceData) {
-    return res.status(404).json({ error: "Instance not found" });
+    console.log(`Instance ${instanceId} not found in memory`);
+    // Tenta buscar do banco de dados primeiro
+    const dbInstance = await prisma.instance.findUnique({
+      where: { id: instanceId }
+    });
+    
+    if (!dbInstance) {
+      return res.status(404).json({ error: "Instance not found" });
+    }
+    
+    if (dbInstance.userId !== req.user.id) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+    
+    return res.json({
+      status: 'disconnected',
+      message: 'Instance exists but not connected. Please restart the instance.',
+      inMemory: false
+    });
   }
   
   if (instanceData.userId !== req.user.id) {
     return res.status(403).json({ error: "Access denied" });
   }
   
-  if (instanceData.sock.qrCode) {
+  const sock = instanceData.sock;
+  
+  // Se a instância já está conectada
+  if (sock.isConnected) {
+    return res.json({
+      status: 'connected',
+      message: 'Instance is already connected to WhatsApp',
+      isConnected: true
+    });
+  }
+  
+  // Se tem QR code disponível
+  if (sock.qrCode) {
     try {
-      // Gerar QR code como imagem PNG
-      const qrImage = await qrcode.toDataURL(instanceData.sock.qrCode);
-      res.json({
-        qr: instanceData.sock.qrCode,
+      const qrImage = await qrcode.toDataURL(sock.qrCode);
+      return res.json({
+        qr: sock.qrCode,
         qrImage: qrImage,
         status: 'qr_available',
-        message: 'Scan this QR code with WhatsApp'
+        message: 'Scan this QR code with WhatsApp',
+        isConnected: false,
+        hasQr: true
       });
     } catch (error) {
-      res.json({
-        qr: instanceData.sock.qrCode,
+      console.error('Error generating QR image:', error);
+      return res.json({
+        qr: sock.qrCode,
         status: 'qr_available',
-        message: 'Scan this QR code with WhatsApp'
+        message: 'Scan this QR code with WhatsApp',
+        isConnected: false,
+        hasQr: true
       });
     }
-  } else if (instanceData.sock.isConnected) {
-    res.json({
-      status: 'connected',
-      message: 'Instance is already connected to WhatsApp'
+  }
+  
+  // Se não tem QR code ainda
+  return res.json({
+    status: 'waiting',
+    message: 'Waiting for QR code generation... Please try again in a few seconds.',
+    timestamp: new Date().toISOString(),
+    isConnected: false,
+    hasQr: false
+  });
+});
+
+// Reconectar instância
+app.post("/api/instances/:id/reconnect", auth, async (req, res) => {
+  try {
+    const instanceId = req.params.id;
+    
+    console.log(`Reconnecting instance: ${instanceId}`);
+    
+    // Verifica se a instância existe no banco
+    const dbInstance = await prisma.instance.findUnique({
+      where: { id: instanceId }
     });
-  } else {
+    
+    if (!dbInstance) {
+      return res.status(404).json({ error: "Instance not found" });
+    }
+    
+    if (dbInstance.userId !== req.user.id) {
+      return res.status(403).json({ error: "Access denied" });
+    }
+    
+    // Remove instância antiga se existir
+    if (instances.has(instanceId)) {
+      const oldInstance = instances.get(instanceId);
+      if (oldInstance.sock) {
+        try {
+          oldInstance.sock.ev.removeAllListeners();
+          if (oldInstance.sock.ws) {
+            oldInstance.sock.ws.close();
+          }
+        } catch (e) {
+          console.error('Error closing old socket:', e);
+        }
+      }
+      instances.delete(instanceId);
+      console.log(`Removed old instance ${instanceId} from memory`);
+    }
+    
+    // Cria nova instância
+    const sessionPath = `sessions/${instanceId}`;
+    const sock = await createWhatsAppSocket(instanceId, sessionPath);
+    
+    instances.set(instanceId, { 
+      sock, 
+      userId: req.user.id,
+      lastUpdated: new Date(),
+      sessionPath: sessionPath
+    });
+    
+    console.log(`Instance ${instanceId} reconnected successfully`);
+    
     res.json({
-      status: 'waiting',
-      message: 'Waiting for QR code generation...'
+      success: true,
+      message: 'Instance reconnected. QR code will be available shortly.',
+      instanceId: instanceId
+    });
+    
+  } catch (error) {
+    console.error('Error reconnecting instance:', error);
+    res.status(500).json({ 
+      error: "Failed to reconnect instance",
+      details: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
   }
 });
@@ -226,23 +476,59 @@ app.post("/api/send", auth, async (req,res)=>{
   }
   
   try {
+    const jid = `${phone}@s.whatsapp.net`;
+    console.log(`Sending message to ${jid} via instance ${instanceId}`);
+    
     await queue.add(() => 
-      instanceData.sock.sendMessage(`${phone}@s.whatsapp.net`, { text })
+      instanceData.sock.sendMessage(jid, { text })
     );
-    res.json({ok:true, message: "Message sent successfully"});
+    
+    res.json({
+      ok: true, 
+      message: "Message sent successfully",
+      to: phone,
+      instanceId: instanceId
+    });
+    
   } catch(error) {
+    console.error('Error sending message:', error);
     res.status(500).json({ error: error.message });
   }
+});
+
+// Debug: Listar todas as instâncias em memória
+app.get("/api/debug/instances", auth, (req, res) => {
+  const result = {};
+  for (const [id, data] of instances.entries()) {
+    result[id] = {
+      userId: data.userId,
+      hasSocket: !!data.sock,
+      hasQR: !!data.sock?.qrCode,
+      isConnected: !!data.sock?.isConnected,
+      lastUpdated: data.lastUpdated,
+      sessionPath: data.sessionPath
+    };
+  }
+  res.json({
+    total: instances.size,
+    instances: result
+  });
 });
 
 // Scheduler para mensagens agendadas
 setInterval(async ()=>{
   const jobs=await prisma.schedule.findMany({where:{sent:false, sendAt:{lte:new Date()}}});
   for(const j of jobs){
-    const sock=instances.get(j.instanceId);
-    if(!sock) continue;
-    await sock.sendMessage(j.phone+"@s.whatsapp.net",{text:j.text});
-    await prisma.schedule.update({where:{id:j.id}, data:{sent:true}});
+    const instanceData=instances.get(j.instanceId);
+    if(!instanceData) continue;
+    if(!instanceData.sock.isConnected) continue;
+    
+    try {
+      await instanceData.sock.sendMessage(j.phone+"@s.whatsapp.net",{text:j.text});
+      await prisma.schedule.update({where:{id:j.id}, data:{sent:true}});
+    } catch(error) {
+      console.error(`Error sending scheduled message ${j.id}:`, error);
+    }
   }
 },5000);
 
@@ -295,11 +581,11 @@ const possibleStaticDirs = [
   path.join(webDir, 'out/static')
 ];
 
-for (const staticDir of possibleStaticDirs) {
-  if (existsSync(staticDir)) {
-    console.log(`Serving static files from: ${staticDir}`);
-    app.use(express.static(staticDir));
-  }
+const nextStaticDir = path.join(webDir, '.next/static');
+
+if (existsSync(nextStaticDir)) {
+  console.log(`Serving Next.js static files from ${nextStaticDir}`);
+  app.use('/_next', express.static(path.join(webDir, '.next')));
 }
 
 // Serve arquivos públicos
@@ -651,4 +937,10 @@ app.get("*", (req, res, next) => {
   `);
 });
 
-app.listen(3000,()=>console.log("SaaS running on 3000"));
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`WhatsApp SaaS API running on port ${PORT}`);
+  console.log(`Sessions directory: ${sessionsDir}`);
+  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`JWT Secret: ${process.env.JWT_SECRET ? 'Set' : 'Using default'}`);
+});
