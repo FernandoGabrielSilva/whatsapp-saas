@@ -6,15 +6,15 @@ WORKDIR /app
 COPY package*.json ./
 COPY apps/web/package*.json apps/web/
 
-# Instala dependências
-RUN npm install
+# Instala dependências com --legacy-peer-deps para evitar conflitos
+RUN npm install --legacy-peer-deps
 
 # Copia todo o código
 COPY . .
 
 # Build do frontend
 WORKDIR /app/apps/web
-RUN npm run build
+RUN npm install --legacy-peer-deps && npm run build
 
 # Volta para raiz
 WORKDIR /app
