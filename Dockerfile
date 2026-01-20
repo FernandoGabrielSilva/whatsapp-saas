@@ -1,9 +1,9 @@
-FROM node:20-alpine
+FROM node:20-slim
 
 WORKDIR /app
 
-# Instala git e outras dependências necessárias
-RUN apk add --no-cache git python3 make g++
+# Instala git (slim já tem, mas garantir)
+RUN apt-get update && apt-get install -y git
 
 # Copia arquivos de dependências
 COPY package*.json ./
