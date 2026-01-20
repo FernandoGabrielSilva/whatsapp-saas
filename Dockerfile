@@ -2,6 +2,9 @@ FROM node:20-alpine
 
 WORKDIR /app
 
+# Instala git e outras dependências necessárias
+RUN apk add --no-cache git python3 make g++
+
 # Copia arquivos de dependências
 COPY package*.json ./
 COPY apps/web/package*.json apps/web/
